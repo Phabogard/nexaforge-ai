@@ -11,7 +11,7 @@ const modes = [
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
-type Task = { id: string; status: string; result?: { calls?: unknown[]; error?: string }; errorCode?: string | null };
+type Task = { id: string; status: string; result?: { answer?: string; calls?: unknown[]; error?: string }; errorCode?: string | null };
 
 type Workspace = { id: string; name: string };
 
@@ -35,11 +35,14 @@ export default function Home() {
   useEffect(() => {
     if (!task || ['completed', 'failed', 'cancelled'].includes(task.status)) return;
     const timer = window.setInterval(async () => {
-      const response = await fetch(`${apiUrl}/api/v1/tasks/${task.id}`);
-      if (response.ok) {
+      try {
+        const response = await fetch(`${apiUrl}/api/v1/tasks/${task.id}`);
+        if (!response.ok) return;
         const data = await response.json();
         setTask(data.task);
         if (['completed', 'failed', 'cancelled'].includes(data.task.status)) setRunning(false);
+      } catch {
+        // Keep polling; transient network failures should not kill the task UI.
       }
     }, 1000);
     return () => window.clearInterval(timer);
@@ -89,7 +92,12 @@ export default function Home() {
         </aside>
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6">
           <div className="min-h-[420px] rounded-xl border border-dashed border-zinc-800 p-8 flex items-center justify-center text-center">
-            <div className="max-w-xl"><div className="text-5xl">🤖</div><h2 className="mt-4 text-2xl font-semibold">{task ? `Mission ${task.status}` : 'Que veux-tu que je fasse ?'}</h2><p className="mt-2 text-zinc-400">{task?.result?.error ?? 'Donne une mission. L’agent choisira les outils nécessaires et vérifiera les résultats.'}</p>{task && <p className="mt-3 text-xs text-zinc-600">Task ID : {task.id}</p>}</div>
+            <div className="max-w-2xl w-full">
+              <div className="text-5xl">{task?.status === 'completed' ? '✨' : '🤖'}</div>
+              <h2 className="mt-4 text-2xl font-semibold">{task ? `Mission ${task.status}` : 'Que veux-tu que je fasse ?'}</h2>
+              {task?.result?.answer ? <div className="mt-5 whitespace-pre-wrap rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5 text-left leading-7 text-zinc-200">{task.result.answer}</div> : <p className="mt-2 text-zinc-400">{task?.result?.error ?? 'Donne une mission. L’agent choisira les outils nécessaires et vérifiera les résultats.'}</p>}
+              {task && <p className="mt-3 text-xs text-zinc-600">Task ID : {task.id}</p>}
+            </div>
           </div>
           {error && <div className="mt-3 rounded-xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-300">{error}</div>}
           <div className="mt-4 rounded-2xl border border-zinc-700 bg-zinc-900 p-3">
