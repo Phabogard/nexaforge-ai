@@ -1,8 +1,8 @@
 import type { AgentMode, AgentTask } from '@nexaforge/shared';
-import { BoundedAgentExecutor, createConfiguredModelProvider, createSupervisor, echoTool, timeTool, UnconfiguredModelProvider } from '@nexaforge/ai-core';
+import { BoundedAgentExecutor, createConfiguredModelProvider, createSupervisor, createToolRegistry, echoTool, timeTool } from '@nexaforge/ai-core';
 import type { TaskRepository, TaskRecord } from '@nexaforge/db';
 
-export type WorkerStore = TaskRepository & { memoryTasks?: Map<string, TaskRecord>; memoryEvents?: Map<string, unknown[]> };
+export type WorkerStore = TaskRepository;
 
 const toAgentTask = (task: TaskRecord): AgentTask => ({
   id: task.id,
@@ -13,6 +13,8 @@ const toAgentTask = (task: TaskRecord): AgentTask => ({
   maxIterations: task.maxIterations,
   budgetCents: task.budgetCents ?? undefined
 });
+
+const workerTools = [timeTool, echoTool];
 
 export class TaskWorker {
   private running = false;
@@ -31,6 +33,7 @@ export class TaskWorker {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
     for (const controller of this.controllers.values()) controller.abort();
+    this.controllers.clear();
   }
 
   cancel(taskId: string): boolean {
@@ -48,13 +51,13 @@ export class TaskWorker {
       } catch (error) {
         console.error('[nexaforge-worker]', error);
       }
+      if (!this.running) break;
       await new Promise<void>(resolve => { this.timer = setTimeout(resolve, this.pollMs); });
     }
   }
 
   private async claim(): Promise<TaskRecord | null> {
-    if (this.store.claimNextQueued) return this.store.claimNextQueued();
-    return null;
+    return this.store.claimNextQueued();
   }
 
   private async process(task: TaskRecord): Promise<void> {
@@ -63,13 +66,16 @@ export class TaskWorker {
     await this.store.addEvent(task.id, 'task.planning', { worker: 'default' });
     try {
       const model = createConfiguredModelProvider();
-      const runtime = createSupervisor([timeTool, echoTool], model);
-      const executor = new BoundedAgentExecutor(runtime, undefined as never);
+      const registry = createToolRegistry(workerTools);
+      const runtime = createSupervisor(registry.list(), model);
+      const executor = new BoundedAgentExecutor(runtime, registry);
       await this.store.updateStatus(task.id, 'running');
       await this.store.addEvent(task.id, 'task.running', {});
       if (controller.signal.aborted) throw new Error('TASK_CANCELLED');
+
       const result = await executor.run(toAgentTask({ ...task, status: 'running' }));
       if (controller.signal.aborted) throw new Error('TASK_CANCELLED');
+
       const status = result.status;
       await this.store.updateExecution(task.id, {
         status,
