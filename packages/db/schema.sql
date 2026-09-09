@@ -22,6 +22,9 @@ CREATE TABLE tasks (
   status text NOT NULL,
   max_iterations integer NOT NULL DEFAULT 12,
   budget_cents integer,
+  result jsonb,
+  error_code text,
+  iteration_count integer NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),
   completed_at timestamptz
 );
@@ -95,6 +98,7 @@ CREATE TABLE usage_records (
 
 CREATE INDEX tasks_workspace_created_idx ON tasks(workspace_id, created_at DESC);
 CREATE INDEX task_events_task_created_idx ON task_events(task_id, created_at);
+CREATE INDEX task_events_type_created_idx ON task_events(task_id, event_type, created_at);
 CREATE INDEX evidence_claim_idx ON evidence(claim_id);
 CREATE INDEX memories_workspace_created_idx ON memories(workspace_id, created_at DESC);
 CREATE INDEX usage_workspace_created_idx ON usage_records(workspace_id, created_at DESC);
