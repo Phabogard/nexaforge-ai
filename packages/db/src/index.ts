@@ -6,27 +6,18 @@ export type TaskEventRecord = { id: string; taskId: string; type: string; payloa
 export type WorkspaceRecord = { id: string; name: string; ownerId: string; createdAt: string };
 export type UserRecord = { id: string; email: string; displayName?: string | null; role: string };
 export type MembershipRecord = { workspaceId: string; userId: string; role: string };
+export type ApprovalRecord = { id: string; taskId: string; workspaceId: string; requestedBy: string; tool: string; input: unknown; status: string; decidedBy?: string | null; decidedAt?: string | null; createdAt: string };
 
 export interface TaskRepository {
-  create(input: CreateTaskInput): Promise<TaskRecord>;
-  get(id: string): Promise<TaskRecord | null>;
-  claimNextQueued(): Promise<TaskRecord | null>;
-  updateStatus(id: string, status: string): Promise<TaskRecord | null>;
-  updateExecution(id: string, input: { status: string; result?: unknown; errorCode?: string; iterationCount: number }): Promise<TaskRecord | null>;
-  addEvent(taskId: string, type: string, payload: unknown): Promise<TaskEventRecord>;
-  listEvents(taskId: string): Promise<TaskEventRecord[]>;
-  createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
-  workspaceExists(id: string): Promise<boolean>;
-  getUserByEmail(email: string): Promise<UserRecord | null>;
-  getUser(id: string): Promise<UserRecord | null>;
-  getMembership(workspaceId: string, userId: string): Promise<MembershipRecord | null>;
+  create(input: CreateTaskInput): Promise<TaskRecord>; get(id: string): Promise<TaskRecord | null>; claimNextQueued(): Promise<TaskRecord | null>; updateStatus(id: string, status: string): Promise<TaskRecord | null>; updateExecution(id: string, input: { status: string; result?: unknown; errorCode?: string; iterationCount: number }): Promise<TaskRecord | null>; addEvent(taskId: string, type: string, payload: unknown): Promise<TaskEventRecord>; listEvents(taskId: string): Promise<TaskEventRecord[]>; createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>; workspaceExists(id: string): Promise<boolean>; getUserByEmail(email: string): Promise<UserRecord | null>; getUser(id: string): Promise<UserRecord | null>; getMembership(workspaceId: string, userId: string): Promise<MembershipRecord | null>; createApproval(input: { taskId: string; workspaceId: string; requestedBy: string; tool: string; input: unknown }): Promise<ApprovalRecord>; listApprovals(taskId: string): Promise<ApprovalRecord[]>; decideApproval(id: string, userId: string, status: 'approved' | 'rejected'): Promise<ApprovalRecord | null>;
 }
 
-const toTask = (row: Record<string, unknown>): TaskRecord => ({ id: String(row.id), prompt: String(row.prompt), mode: String(row.mode), status: String(row.status), workspaceId: String(row.workspace_id), maxIterations: Number(row.max_iterations ?? 12), budgetCents: row.budget_cents === null ? null : Number(row.budget_cents), result: row.result ?? undefined, errorCode: row.error_code ? String(row.error_code) : null, iterationCount: Number(row.iteration_count ?? 0), createdAt: new Date(String(row.created_at)).toISOString(), completedAt: row.completed_at ? new Date(String(row.completed_at)).toISOString() : null });
-const toEvent = (row: Record<string, unknown>): TaskEventRecord => ({ id: String(row.id), taskId: String(row.task_id), type: String(row.event_type), payload: row.payload, createdAt: new Date(String(row.created_at)).toISOString() });
-const toWorkspace = (row: Record<string, unknown>): WorkspaceRecord => ({ id: String(row.id), name: String(row.name), ownerId: String(row.owner_id), createdAt: new Date(String(row.created_at)).toISOString() });
-const toUser = (row: Record<string, unknown>): UserRecord => ({ id: String(row.id), email: String(row.email), displayName: row.display_name ? String(row.display_name) : null, role: String(row.role ?? 'member') });
-const toMembership = (row: Record<string, unknown>): MembershipRecord => ({ workspaceId: String(row.workspace_id), userId: String(row.user_id), role: String(row.role) });
+const toTask = (r: Record<string, unknown>): TaskRecord => ({ id: String(r.id), prompt: String(r.prompt), mode: String(r.mode), status: String(r.status), workspaceId: String(r.workspace_id), maxIterations: Number(r.max_iterations ?? 12), budgetCents: r.budget_cents === null ? null : Number(r.budget_cents), result: r.result ?? undefined, errorCode: r.error_code ? String(r.error_code) : null, iterationCount: Number(r.iteration_count ?? 0), createdAt: new Date(String(r.created_at)).toISOString(), completedAt: r.completed_at ? new Date(String(r.completed_at)).toISOString() : null });
+const toEvent = (r: Record<string, unknown>): TaskEventRecord => ({ id: String(r.id), taskId: String(r.task_id), type: String(r.event_type), payload: r.payload, createdAt: new Date(String(r.created_at)).toISOString() });
+const toWorkspace = (r: Record<string, unknown>): WorkspaceRecord => ({ id: String(r.id), name: String(r.name), ownerId: String(r.owner_id), createdAt: new Date(String(r.created_at)).toISOString() });
+const toUser = (r: Record<string, unknown>): UserRecord => ({ id: String(r.id), email: String(r.email), displayName: r.display_name ? String(r.display_name) : null, role: String(r.role ?? 'member') });
+const toMembership = (r: Record<string, unknown>): MembershipRecord => ({ workspaceId: String(r.workspace_id), userId: String(r.user_id), role: String(r.role) });
+const toApproval = (r: Record<string, unknown>): ApprovalRecord => ({ id: String(r.id), taskId: String(r.task_id), workspaceId: String(r.workspace_id), requestedBy: String(r.requested_by), tool: String(r.tool), input: r.input, status: String(r.status), decidedBy: r.decided_by ? String(r.decided_by) : null, decidedAt: r.decided_at ? new Date(String(r.decided_at)).toISOString() : null, createdAt: new Date(String(r.created_at)).toISOString() });
 
 class PostgresTaskRepository implements TaskRepository {
   constructor(private readonly sql: NeonQueryFunction<false, false>) {}
@@ -42,6 +33,9 @@ class PostgresTaskRepository implements TaskRepository {
   async getUserByEmail(email: string): Promise<UserRecord | null> { const rows = await this.sql`SELECT id, email, display_name, role FROM users WHERE email = ${email} LIMIT 1`; return rows.length ? toUser(rows[0] as Record<string, unknown>) : null; }
   async getUser(id: string): Promise<UserRecord | null> { const rows = await this.sql`SELECT id, email, display_name, role FROM users WHERE id = ${id}::uuid LIMIT 1`; return rows.length ? toUser(rows[0] as Record<string, unknown>) : null; }
   async getMembership(workspaceId: string, userId: string): Promise<MembershipRecord | null> { const rows = await this.sql`SELECT workspace_id, user_id, role FROM workspace_members WHERE workspace_id = ${workspaceId}::uuid AND user_id = ${userId}::uuid LIMIT 1`; return rows.length ? toMembership(rows[0] as Record<string, unknown>) : null; }
+  async createApproval(input: { taskId: string; workspaceId: string; requestedBy: string; tool: string; input: unknown }): Promise<ApprovalRecord> { const rows = await this.sql`INSERT INTO approvals (task_id, workspace_id, requested_by, tool, input) VALUES (${input.taskId}::uuid, ${input.workspaceId}::uuid, ${input.requestedBy}::uuid, ${input.tool}, ${JSON.stringify(input.input)}::jsonb) RETURNING id, task_id, workspace_id, requested_by, tool, input, status, decided_by, decided_at, created_at`; return toApproval(rows[0] as Record<string, unknown>); }
+  async listApprovals(taskId: string): Promise<ApprovalRecord[]> { const rows = await this.sql`SELECT id, task_id, workspace_id, requested_by, tool, input, status, decided_by, decided_at, created_at FROM approvals WHERE task_id = ${taskId}::uuid ORDER BY created_at ASC`; return rows.map(row => toApproval(row as Record<string, unknown>)); }
+  async decideApproval(id: string, userId: string, status: 'approved' | 'rejected'): Promise<ApprovalRecord | null> { const rows = await this.sql`UPDATE approvals SET status = ${status}, decided_by = ${userId}::uuid, decided_at = now() WHERE id = ${id}::uuid AND status = 'pending' RETURNING id, task_id, workspace_id, requested_by, tool, input, status, decided_by, decided_at, created_at`; return rows.length ? toApproval(rows[0] as Record<string, unknown>) : null; }
 }
 
 export function createTaskRepository(databaseUrl = process.env.DATABASE_URL): TaskRepository | null { if (!databaseUrl) return null; return new PostgresTaskRepository(neon(databaseUrl)); }
