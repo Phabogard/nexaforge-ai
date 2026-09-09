@@ -79,11 +79,11 @@ export class TaskWorker {
       const status = result.status;
       await this.store.updateExecution(task.id, {
         status,
-        result: { calls: result.calls },
+        result: { answer: result.answer, calls: result.calls },
         iterationCount: result.calls.length,
         errorCode: status === 'failed' ? 'EXECUTION_FAILED' : undefined
       });
-      await this.store.addEvent(task.id, `task.${status}`, { calls: result.calls.length });
+      await this.store.addEvent(task.id, `task.${status}`, { calls: result.calls.length, hasAnswer: Boolean(result.answer) });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'TASK_EXECUTION_FAILED';
       const cancelled = message === 'TASK_CANCELLED' || controller.signal.aborted;
