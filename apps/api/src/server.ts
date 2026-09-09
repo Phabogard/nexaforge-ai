@@ -26,6 +26,8 @@ const bootstrapSchema = z.object({
   workspaceName: z.string().min(1).max(120).optional()
 });
 
+const terminalStatuses = new Set(['completed', 'failed', 'cancelled']);
+
 async function recordEvent(taskId: string, type: string, payload: unknown) {
   if (repository) return repository.addEvent(taskId, type, payload);
   const event: TaskEventRecord = { id: randomUUID(), taskId, type, payload, createdAt: new Date().toISOString() };
@@ -101,6 +103,80 @@ app.get('/api/v1/tasks/:id/events', async (request, reply) => {
   const task = repository ? await repository.get(id) : memoryTasks.get(id) ?? null;
   if (!task) return reply.code(404).send({ error: 'TASK_NOT_FOUND' });
   return { events: repository ? await repository.listEvents(id) : memoryEvents.get(id) ?? [] };
+});
+
+app.get('/api/v1/tasks/:id/stream', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const initialTask = repository ? await repository.get(id) : memoryTasks.get(id) ?? null;
+  if (!initialTask) return reply.code(404).send({ error: 'TASK_NOT_FOUND' });
+
+  reply.hijack();
+  const response = reply.raw;
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  let closed = false;
+  let lastEventId = '';
+  let timer: NodeJS.Timeout | undefined;
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    if (timer) clearTimeout(timer);
+    request.raw.off('close', cleanup);
+    if (!response.destroyed) response.end();
+  };
+
+  request.raw.on('close', cleanup);
+
+  const send = (event: string, data: unknown, id?: string) => {
+    if (closed || response.destroyed) return;
+    if (id) response.write(`id: ${id}\n`);
+    response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  send('task.snapshot', initialTask, initialTask.id);
+
+  const tick = async () => {
+    if (closed) return;
+    try {
+      const task = repository ? await repository.get(id) : memoryTasks.get(id) ?? null;
+      if (!task) {
+        send('error', { error: 'TASK_NOT_FOUND' });
+        cleanup();
+        return;
+      }
+
+      const events = repository ? await repository.listEvents(id) : memoryEvents.get(id) ?? [];
+      for (const event of events) {
+        if (lastEventId && event.id === lastEventId) continue;
+        if (lastEventId) {
+          const previousIndex = events.findIndex(item => item.id === lastEventId);
+          const currentIndex = events.findIndex(item => item.id === event.id);
+          if (previousIndex >= 0 && currentIndex <= previousIndex) continue;
+        }
+        send(event.type, event.payload, event.id);
+        lastEventId = event.id;
+      }
+
+      send('task.snapshot', task, task.id);
+      if (terminalStatuses.has(task.status)) {
+        send('done', { status: task.status, taskId: task.id });
+        cleanup();
+        return;
+      }
+    } catch (error) {
+      send('error', { error: error instanceof Error ? error.message : 'STREAM_FAILED' });
+    }
+
+    if (!closed) timer = setTimeout(() => { void tick(); }, 500);
+  };
+
+  void tick();
 });
 
 app.post('/api/v1/tasks/:id/cancel', async (request, reply) => {
