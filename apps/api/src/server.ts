@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createTaskRepository, type TaskRepository, type TaskRecord, type TaskEventRecord } from '@nexaforge/db';
@@ -34,6 +35,7 @@ async function recordEvent(taskId: string, type: string, payload: unknown) {
   return event;
 }
 
+app.register(cors, { origin: process.env.WEB_APP_URL ?? 'http://localhost:3000' });
 app.get('/health', async () => ({ ok: true, service: 'nexaforge-api', persistence: repository ? 'postgres' : 'memory', worker: worker ? 'running' : 'disabled' }));
 
 app.post('/api/v1/dev/bootstrap', async (request, reply) => {
