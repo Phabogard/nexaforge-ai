@@ -1,4 +1,4 @@
-import type { AgentMode } from '@nexaforge/shared';
+import type { AgentMode, AgentTask } from '@nexaforge/shared';
 import { BoundedAgentExecutor, createConfiguredModelProvider, createSupervisor, createToolRegistry, echoTool, timeTool, webSearchTool } from '@nexaforge/ai-core';
 import type { TaskRepository, TaskRecord } from '@nexaforge/db';
 export type WorkerStore = TaskRepository;
