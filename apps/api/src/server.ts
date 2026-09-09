@@ -19,6 +19,12 @@ const taskSchema = z.object({
   budgetCents: z.number().int().min(0).optional()
 });
 
+const bootstrapSchema = z.object({
+  email: z.string().email(),
+  displayName: z.string().min(1).max(120).optional(),
+  workspaceName: z.string().min(1).max(120).optional()
+});
+
 async function recordEvent(taskId: string, type: string, payload: unknown) {
   if (repository) return repository.addEvent(taskId, type, payload);
   const event: TaskEventRecord = { id: randomUUID(), taskId, type, payload, createdAt: new Date().toISOString() };
@@ -30,10 +36,27 @@ async function recordEvent(taskId: string, type: string, payload: unknown) {
 
 app.get('/health', async () => ({ ok: true, service: 'nexaforge-api', persistence: repository ? 'postgres' : 'memory', worker: worker ? 'running' : 'disabled' }));
 
+app.post('/api/v1/dev/bootstrap', async (request, reply) => {
+  if (process.env.NODE_ENV === 'production') return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (!repository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const parsed = bootstrapSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_REQUEST', details: parsed.error.flatten() });
+  try {
+    const workspace = await repository.createWorkspace(parsed.data);
+    return reply.code(201).send({ workspace });
+  } catch (error) {
+    request.log.error(error);
+    return reply.code(500).send({ error: 'BOOTSTRAP_FAILED' });
+  }
+});
+
 app.post('/api/v1/tasks', async (request, reply) => {
   const parsed = taskSchema.safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_REQUEST', details: parsed.error.flatten() });
   if (repository && !parsed.data.workspaceId) return reply.code(400).send({ error: 'WORKSPACE_REQUIRED' });
+  if (repository && parsed.data.workspaceId && !(await repository.workspaceExists(parsed.data.workspaceId))) {
+    return reply.code(404).send({ error: 'WORKSPACE_NOT_FOUND' });
+  }
 
   try {
     const task = repository
