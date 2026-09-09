@@ -3,6 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "scripts": { "dev": "tsx src/server.ts", "build": "tsc", "typecheck": "tsc --noEmit", "test": "vitest run" },
-  "dependencies": { "@nexaforge/ai-core": "workspace:*", "@nexaforge/db": "workspace:*", "@nexaforge/shared": "workspace:*", "fastify": "^5.5.0", "zod": "^4.1.5" },
+  "dependencies": { "@fastify/cors": "^11.0.1", "@nexaforge/ai-core": "workspace:*", "@nexaforge/db": "workspace:*", "@nexaforge/shared": "workspace:*", "fastify": "^5.5.0", "zod": "^4.1.5" },
   "devDependencies": { "tsx": "^4.20.5", "typescript": "^5.9.2", "vitest": "^3.2.4" }
 }
