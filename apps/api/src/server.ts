@@ -1,26 +1,29 @@
 import Fastify from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { createTaskRepository, type TaskRepository, type TaskRecord } from '@nexaforge/db';
+import { createTaskRepository, type TaskRepository, type TaskRecord, type TaskEventRecord } from '@nexaforge/db';
 import type { AgentMode } from '@nexaforge/shared';
 
 const app = Fastify({ logger: true });
 const memoryTasks = new Map<string, TaskRecord>();
-const memoryEvents = new Map<string, Array<{ type: string; payload: unknown; createdAt: string }>>();
+const memoryEvents = new Map<string, TaskEventRecord[]>();
 const repository: TaskRepository | null = createTaskRepository();
 
 const taskSchema = z.object({
   prompt: z.string().min(1).max(20000),
   mode: z.string().default('auto'),
   workspaceId: z.string().uuid().optional(),
-  maxIterations: z.number().int().min(1).max(50).optional(),
+  maxIterations: z.number().int().min(1).max(50).default(12),
   budgetCents: z.number().int().min(0).optional()
 });
 
 async function recordEvent(taskId: string, type: string, payload: unknown) {
-  const event = { type, payload, createdAt: new Date().toISOString() };
+  if (repository) return repository.addEvent(taskId, type, payload);
+  const event: TaskEventRecord = { id: randomUUID(), taskId, type, payload, createdAt: new Date().toISOString() };
   const events = memoryEvents.get(taskId) ?? [];
   events.push(event);
   memoryEvents.set(taskId, events);
+  return event;
 }
 
 app.get('/health', async () => ({ ok: true, service: 'nexaforge-api', persistence: repository ? 'postgres' : 'memory' }));
@@ -32,15 +35,20 @@ app.post('/api/v1/tasks', async (request, reply) => {
 
   try {
     const task = repository
-      ? await repository.create({ prompt: parsed.data.prompt, mode: parsed.data.mode, workspaceId: parsed.data.workspaceId! })
+      ? await repository.create({ prompt: parsed.data.prompt, mode: parsed.data.mode, workspaceId: parsed.data.workspaceId!, maxIterations: parsed.data.maxIterations, budgetCents: parsed.data.budgetCents })
       : (() => {
-          const id = crypto.randomUUID();
-          const created: TaskRecord = { id, prompt: parsed.data.prompt, mode: parsed.data.mode as AgentMode, status: 'queued', workspaceId: parsed.data.workspaceId ?? 'local-dev', createdAt: new Date().toISOString() };
+          const id = randomUUID();
+          const created: TaskRecord = {
+            id, prompt: parsed.data.prompt, mode: parsed.data.mode as AgentMode, status: 'queued',
+            workspaceId: parsed.data.workspaceId ?? 'local-dev', maxIterations: parsed.data.maxIterations,
+            budgetCents: parsed.data.budgetCents ?? null, result: undefined, errorCode: null, iterationCount: 0,
+            createdAt: new Date().toISOString(), completedAt: null
+          };
           memoryTasks.set(id, created);
           return created;
         })();
 
-    await recordEvent(task.id, 'task.queued', { mode: task.mode });
+    await recordEvent(task.id, 'task.queued', { mode: task.mode, maxIterations: task.maxIterations, budgetCents: task.budgetCents ?? null });
     return reply.code(202).send(task);
   } catch (error) {
     request.log.error(error);
@@ -53,11 +61,19 @@ app.get('/api/v1/tasks/:id', async (request, reply) => {
   try {
     const task = repository ? await repository.get(id) : memoryTasks.get(id) ?? null;
     if (!task) return reply.code(404).send({ error: 'TASK_NOT_FOUND' });
-    return { task, events: memoryEvents.get(id) ?? [] };
+    const events = repository ? await repository.listEvents(id) : memoryEvents.get(id) ?? [];
+    return { task, events };
   } catch (error) {
     request.log.error(error);
     return reply.code(500).send({ error: 'TASK_READ_FAILED' });
   }
+});
+
+app.get('/api/v1/tasks/:id/events', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const task = repository ? await repository.get(id) : memoryTasks.get(id) ?? null;
+  if (!task) return reply.code(404).send({ error: 'TASK_NOT_FOUND' });
+  return { events: repository ? await repository.listEvents(id) : memoryEvents.get(id) ?? [] };
 });
 
 app.post('/api/v1/tasks/:id/cancel', async (request, reply) => {
