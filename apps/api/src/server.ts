@@ -3,11 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createTaskRepository, type TaskRepository, type TaskRecord, type TaskEventRecord } from '@nexaforge/db';
 import type { AgentMode } from '@nexaforge/shared';
+import { configuredWorker, type TaskWorker } from './task-worker';
 
 const app = Fastify({ logger: true });
 const memoryTasks = new Map<string, TaskRecord>();
 const memoryEvents = new Map<string, TaskEventRecord[]>();
 const repository: TaskRepository | null = createTaskRepository();
+const worker: TaskWorker | null = repository ? configuredWorker(repository) : null;
 
 const taskSchema = z.object({
   prompt: z.string().min(1).max(20000),
@@ -26,7 +28,7 @@ async function recordEvent(taskId: string, type: string, payload: unknown) {
   return event;
 }
 
-app.get('/health', async () => ({ ok: true, service: 'nexaforge-api', persistence: repository ? 'postgres' : 'memory' }));
+app.get('/health', async () => ({ ok: true, service: 'nexaforge-api', persistence: repository ? 'postgres' : 'memory', worker: worker ? 'running' : 'disabled' }));
 
 app.post('/api/v1/tasks', async (request, reply) => {
   const parsed = taskSchema.safeParse(request.body);
@@ -89,6 +91,7 @@ app.post('/api/v1/tasks/:id/cancel', async (request, reply) => {
           return cancelled;
         })();
     if (!task) return reply.code(404).send({ error: 'TASK_NOT_FOUND' });
+    worker?.cancel(id);
     await recordEvent(id, 'task.cancelled', {});
     return task;
   } catch (error) {
@@ -97,4 +100,14 @@ app.post('/api/v1/tasks/:id/cancel', async (request, reply) => {
   }
 });
 
-app.listen({ port: Number(process.env.PORT ?? 4000), host: process.env.HOST ?? '0.0.0.0' }).catch(error => { app.log.error(error); process.exit(1); });
+const shutdown = async () => {
+  worker?.stop();
+  await app.close();
+};
+
+process.once('SIGINT', () => { void shutdown().finally(() => process.exit(0)); });
+process.once('SIGTERM', () => { void shutdown().finally(() => process.exit(0)); });
+
+app.listen({ port: Number(process.env.PORT ?? 4000), host: process.env.HOST ?? '0.0.0.0' }).then(() => {
+  worker?.start();
+}).catch(error => { app.log.error(error); process.exit(1); });
