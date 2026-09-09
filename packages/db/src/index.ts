@@ -34,6 +34,7 @@ export type TaskEventRecord = {
 export interface TaskRepository {
   create(input: CreateTaskInput): Promise<TaskRecord>;
   get(id: string): Promise<TaskRecord | null>;
+  claimNextQueued(): Promise<TaskRecord | null>;
   updateStatus(id: string, status: string): Promise<TaskRecord | null>;
   updateExecution(id: string, input: { status: string; result?: unknown; errorCode?: string; iterationCount: number }): Promise<TaskRecord | null>;
   addEvent(taskId: string, type: string, payload: unknown): Promise<TaskEventRecord>;
@@ -68,6 +69,18 @@ class PostgresTaskRepository implements TaskRepository {
 
   async get(id: string): Promise<TaskRecord | null> {
     const rows = await this.sql`SELECT id, workspace_id, prompt, mode, status, max_iterations, budget_cents, result, error_code, iteration_count, created_at, completed_at FROM tasks WHERE id = ${id}::uuid`;
+    return rows.length ? toTask(rows[0] as Record<string, unknown>) : null;
+  }
+
+  async claimNextQueued(): Promise<TaskRecord | null> {
+    const rows = await this.sql`
+      WITH next_task AS (
+        SELECT id FROM tasks WHERE status = 'queued' ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
+      )
+      UPDATE tasks SET status = 'planning'
+      WHERE id IN (SELECT id FROM next_task)
+      RETURNING id, workspace_id, prompt, mode, status, max_iterations, budget_cents, result, error_code, iteration_count, created_at, completed_at
+    `;
     return rows.length ? toTask(rows[0] as Record<string, unknown>) : null;
   }
 
