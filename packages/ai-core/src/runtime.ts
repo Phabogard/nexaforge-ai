@@ -4,6 +4,7 @@ import { ToolRegistry } from './tool-registry';
 
 export interface RuntimeResult {
   calls: ToolCall[];
+  answer?: string;
   status: 'completed' | 'waiting' | 'failed';
 }
 
@@ -16,10 +17,10 @@ export class BoundedAgentExecutor {
     const calls = await this.runtime.execute(task, plan);
     const hasPendingApproval = calls.some(call => call.status === 'proposed');
     const hasFailure = calls.some(call => call.status === 'failed' || call.status === 'blocked');
-    return {
-      calls,
-      status: hasPendingApproval ? 'waiting' : hasFailure ? 'failed' : 'completed'
-    };
+    if (hasPendingApproval) return { calls, status: 'waiting' };
+    if (hasFailure) return { calls, status: 'failed' };
+    const answer = await this.runtime.synthesize(task, calls);
+    return { calls, answer, status: 'completed' };
   }
 }
 
