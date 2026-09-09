@@ -31,6 +31,13 @@ export type TaskEventRecord = {
   createdAt: string;
 };
 
+export type WorkspaceRecord = {
+  id: string;
+  name: string;
+  ownerId: string;
+  createdAt: string;
+};
+
 export interface TaskRepository {
   create(input: CreateTaskInput): Promise<TaskRecord>;
   get(id: string): Promise<TaskRecord | null>;
@@ -39,6 +46,8 @@ export interface TaskRepository {
   updateExecution(id: string, input: { status: string; result?: unknown; errorCode?: string; iterationCount: number }): Promise<TaskRecord | null>;
   addEvent(taskId: string, type: string, payload: unknown): Promise<TaskEventRecord>;
   listEvents(taskId: string): Promise<TaskEventRecord[]>;
+  createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
+  workspaceExists(id: string): Promise<boolean>;
 }
 
 const toTask = (row: Record<string, unknown>): TaskRecord => ({
@@ -53,6 +62,10 @@ const toTask = (row: Record<string, unknown>): TaskRecord => ({
 const toEvent = (row: Record<string, unknown>): TaskEventRecord => ({
   id: String(row.id), taskId: String(row.task_id), type: String(row.event_type), payload: row.payload,
   createdAt: new Date(String(row.created_at)).toISOString()
+});
+
+const toWorkspace = (row: Record<string, unknown>): WorkspaceRecord => ({
+  id: String(row.id), name: String(row.name), ownerId: String(row.owner_id), createdAt: new Date(String(row.created_at)).toISOString()
 });
 
 class PostgresTaskRepository implements TaskRepository {
@@ -112,6 +125,25 @@ class PostgresTaskRepository implements TaskRepository {
   async listEvents(taskId: string): Promise<TaskEventRecord[]> {
     const rows = await this.sql`SELECT id, task_id, event_type, payload, created_at FROM task_events WHERE task_id = ${taskId}::uuid ORDER BY created_at ASC`;
     return rows.map(row => toEvent(row as Record<string, unknown>));
+  }
+
+  async createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord> {
+    const rows = await this.sql`
+      WITH new_user AS (
+        INSERT INTO users (email, display_name) VALUES (${input.email}, ${input.displayName ?? null})
+        ON CONFLICT (email) DO UPDATE SET display_name = COALESCE(EXCLUDED.display_name, users.display_name)
+        RETURNING id
+      )
+      INSERT INTO workspaces (name, owner_id)
+      SELECT ${input.workspaceName ?? 'NexaForge Workspace'}, id FROM new_user
+      RETURNING id, name, owner_id, created_at
+    `;
+    return toWorkspace(rows[0] as Record<string, unknown>);
+  }
+
+  async workspaceExists(id: string): Promise<boolean> {
+    const rows = await this.sql`SELECT 1 FROM workspaces WHERE id = ${id}::uuid LIMIT 1`;
+    return rows.length > 0;
   }
 }
 
