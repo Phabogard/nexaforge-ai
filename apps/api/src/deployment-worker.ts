@@ -67,6 +67,9 @@ export class ApplicationDeploymentWorker {
         port: typeof (deployment.metadata as Record<string, unknown>).requestedPort === 'number' ? (deployment.metadata as Record<string, unknown>).requestedPort as number : undefined
       });
 
+      const latest = await this.repository.getDeployment(deployment.id);
+      if (!latest || latest.status === 'cancelled') return;
+
       await this.repository.updateDeployment(deployment.id, {
         status: result.status,
         externalId: result.externalId,
