@@ -119,7 +119,7 @@ app.post('/api/v1/applications/:id/deployments', async (request, reply) => {
     buildId: build.id,
     provider: body.data.provider,
     environment: body.data.environment,
-    metadata: { requestedPort: body.data.port ?? null, source: body.data.source ?? null }
+    metadata: { requestedPort: body.data.port ?? null, source: body.data.source ?? (build.result && typeof build.result === 'object' && 'deploymentSource' in build.result ? (build.result as {deploymentSource?: unknown}).deploymentSource ?? null : null) }
   });
   await applicationRepository.addBuildEvent({
     buildId: build.id,
