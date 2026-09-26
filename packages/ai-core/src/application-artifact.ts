@@ -125,6 +125,10 @@ export interface ApplicationArtifactManifest {
   createdAt: string;
 }
 
+export function hashArtifactFiles(files: ApplicationArtifactFile[]): string {
+  return files.map(file => file.path + ':' + file.contentHash).sort().join('|');
+}
+
 export function createWorkspaceArtifactManifest(
   projectId: string,
   buildId: string,
