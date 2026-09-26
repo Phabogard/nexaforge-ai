@@ -89,7 +89,7 @@ export function createDockerImageBuilder(options: DockerImageBuilderOptions = {}
 
       const workspaceRoot = resolve(request.workspaceRoot ?? request.source.workspaceRoot);
       const reference = request.registry
-        ? `${request.registry.replace(/\\/$/, '')}/${request.imageName}:${request.imageTag}`
+        ? `${request.registry.replace(/\/$/, '')}/${request.imageName}:${request.imageTag}`
         : `${request.imageName}:${request.imageTag}`;
 
       if (!SAFE_IMAGE_NAME.test(reference.replace(/:[A-Za-z0-9_.-]+$/, ''))) {
