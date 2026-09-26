@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createConfiguredModelProvider, createApplicationBuilder, createContainerManifest, createWorkspaceArtifactManifest, createDockerImageBuilder, createDockerRegistryArtifactPublisher } from '@nexaforge/ai-core';
 import type { ApplicationRepository, ApplicationBuildRecord } from '@nexaforge/db';
+import type { ApplicationDeploymentSource } from '@nexaforge/ai-core';
 
 const SECRET_FILE = /(^|\/)(\.env(?:\..*)?|credentials?\.(json|ya?ml)|.*\.(pem|key|p12|pfx))$/i;
 
@@ -59,7 +60,7 @@ export class ApplicationBuildWorker {
           sizeBytes: artifact.size
         }));
         const manifest = createWorkspaceArtifactManifest(project.id, build.id, source, artifactFiles);
-        let deploymentSource = source;
+        let deploymentSource: ApplicationDeploymentSource = source;
         let image: { reference:string; digest?:string; registry?:string } | undefined;
 
         if (process.env.APPLICATION_IMAGE_BUILD === 'true') {
