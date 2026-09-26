@@ -74,3 +74,6 @@ export { OpenAICompatibleProvider, UnconfiguredModelProvider, createConfiguredMo
 export * from './application-builder';
 export * from './workspace-tools';
 export * from './build-verifier';
+
+export { applicationBuilderTools } from './application-tools';
+export { createApplicationPlanner } from './application-planner';
