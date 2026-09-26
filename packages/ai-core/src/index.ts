@@ -74,6 +74,7 @@ export { OpenAICompatibleProvider, UnconfiguredModelProvider, createConfiguredMo
 export * from './application-builder';
 export * from './workspace-tools';
 export { createWorkspaceSandbox } from './workspace-sandbox';
+export { createApplicationBuilder } from './application-builder-runtime';
 export * from './build-verifier';
 
 export { applicationBuilderTools, createApplicationTools } from './application-tools';
