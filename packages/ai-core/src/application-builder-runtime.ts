@@ -3,11 +3,11 @@ import type {
   ApplicationBuildRequest, ApplicationBuildResult, ApplicationBuilder,
   ApplicationBuildPhase, ProjectBlueprint
 } from './application-builder';
-import { createApplicationBuildSteps } from './application-builder';
 import { createApplicationPlanner } from './application-planner';
 import { createBuildVerifier, type BuildVerifier } from './build-verifier';
 import { createWorkspaceSandbox } from './workspace-sandbox';
 import type { WorkspacePathPolicy } from './workspace-tools';
+import { normalizeDependencySpec, validateProjectPath } from './application-policy';
 
 interface GeneratedFile { path: string; content: string; }
 interface ApplicationBuilderOptions {
@@ -24,13 +24,21 @@ function parseFiles(raw: string): GeneratedFile[] {
     if (!item || typeof item !== 'object') throw new Error('INVALID_GENERATED_FILE');
     const value = item as Record<string, unknown>;
     if (typeof value.path !== 'string' || !value.path || typeof value.content !== 'string') throw new Error('INVALID_GENERATED_FILE');
+    validateProjectPath(value.path);
+    if (value.content.length > 1_000_000) throw new Error('GENERATED_FILE_TOO_LARGE');
     return { path: value.path, content: value.content };
   });
 }
 
 function packageJson(blueprint: ProjectBlueprint): string {
-  const dependencies = Object.fromEntries(blueprint.dependencies.map(name => [name, 'latest']));
-  const devDependencies = Object.fromEntries(blueprint.devDependencies.map(name => [name, 'latest']));
+  const dependencies = Object.fromEntries(blueprint.dependencies.map(spec => {
+    const parsed = normalizeDependencySpec(spec);
+    return [parsed.name, parsed.version];
+  }));
+  const devDependencies = Object.fromEntries(blueprint.devDependencies.map(spec => {
+    const parsed = normalizeDependencySpec(spec);
+    return [parsed.name, parsed.version];
+  }));
   return JSON.stringify({
     name: blueprint.name,
     version: '0.1.0',
@@ -73,7 +81,6 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           ? options.verifierFactory(request.workspaceRoot, blueprint)
           : createBuildVerifier({ workspace, packageManager: blueprint.packageManager, cwd: '.' });
 
-        checkAbort();
         const generationPrompt = [
           'You are the NexaForge coding agent.',
           'Generate a complete runnable application from the validated blueprint below.',
@@ -82,13 +89,13 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           'Include every file required for install, test, build and start.',
           JSON.stringify(blueprint)
         ].join('\n');
+
         const generated = parseFiles(await options.model.generate({
           system: generationPrompt,
           messages: [{ role: 'user', content: request.prompt }]
         }));
         for (const file of generated) {
           checkAbort();
-          workspace.resolve(file.path);
           await workspace.writeFile(file.path, file.content, signal);
         }
         if (!generated.some(file => file.path === 'package.json')) {
@@ -114,17 +121,14 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
             'Repair the generated application.',
             'Return ONLY JSON array of file patches with full file contents.',
             'Only patch files needed to fix the diagnostics.',
-            'Never use absolute paths or destructive commands.',
+            'Never use absolute paths, secrets, or destructive shell commands.',
             'Diagnostics:', JSON.stringify(verification)
           ].join('\n');
           const patches = parseFiles(await options.model.generate({
             system: repairPrompt,
             messages: [{ role: 'user', content: request.prompt }]
           }));
-          for (const patch of patches) {
-            workspace.resolve(patch.path);
-            await workspace.writeFile(patch.path, patch.content, signal);
-          }
+          for (const patch of patches) await workspace.writeFile(patch.path, patch.content, signal);
           phase = 'testing';
           verification = await verifier.test(signal);
         }
@@ -136,7 +140,8 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
         if (!build.ok) throw new Error('BUILD_FAILED');
         const runtime = await verifier.validateRuntime(signal);
         if (!runtime.ok && runtime.exitCode !== undefined) throw new Error('RUNTIME_VALIDATION_FAILED');
-        completedSteps.push('repair', 'validate');
+        if (repairAttempts > 0) completedSteps.push('repair');
+        completedSteps.push('validate');
 
         return { projectId: request.projectId, phase: 'completed', blueprint, completedSteps, repairAttempts, summary: 'Application generated, tested and validated.' };
       } catch (error) {
