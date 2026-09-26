@@ -1,6 +1,6 @@
 import { mkdir, readdir, stat, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createConfiguredModelProvider, createApplicationBuilder, createContainerManifest, createWorkspaceArtifactManifest, createDockerImageBuilder, createDockerRegistryArtifactPublisher } from '@nexaforge/ai-core';
 import type { ApplicationRepository, ApplicationBuildRecord } from '@nexaforge/db';
 import type { ApplicationDeploymentSource } from '@nexaforge/ai-core';
@@ -14,14 +14,14 @@ async function collectArtifacts(root:string):Promise<Array<{path:string,kind:str
 }
 
 export class ApplicationBuildWorker {
-  private running=false; private timer?:NodeJS.Timeout; private readonly controllers=new Map<string,AbortController>();
+  private running=false; private timer?:NodeJS.Timeout; private readonly controllers=new Map<string,AbortController>(); private readonly workerId=`application-worker-${process.pid}-${randomUUID()}`; private readonly leaseSeconds=60;
   constructor(private readonly store:ApplicationRepository,private readonly pollMs=1000,private readonly root=process.env.APPLICATION_WORKSPACE_ROOT??'/tmp/nexaforge-projects'){}
   start(){if(this.running)return;this.running=true;void this.loop();}
   stop(){this.running=false;if(this.timer)clearTimeout(this.timer);for(const c of this.controllers.values())c.abort();this.controllers.clear();}
   cancel(id:string){this.controllers.get(id)?.abort();}
-  private async loop(){while(this.running){try{const build=await this.store.claimNextBuild();if(build)await this.process(build);}catch(error){console.error('[nexaforge-application-worker]',error);}if(this.running)await new Promise<void>(r=>{this.timer=setTimeout(r,this.pollMs);});}}
+  private async loop(){while(this.running){try{const build=await this.store.claimNextBuild(this.workerId,this.leaseSeconds);if(build)await this.process(build);}catch(error){console.error('[nexaforge-application-worker]',error);}if(this.running)await new Promise<void>(r=>{this.timer=setTimeout(r,this.pollMs);});}}
   private async process(build:ApplicationBuildRecord){
-    const controller=new AbortController();this.controllers.set(build.id,controller);
+    const controller=new AbortController();this.controllers.set(build.id,controller);const heartbeat=setInterval(()=>{void this.store.renewBuildLease(build.id,this.workerId,this.leaseSeconds).catch(()=>{});},20000);
     const project=await this.store.getProject(build.projectId);
     if(!project){await this.store.updateBuild(build.id,{status:'failed',phase:'failed',errorCode:'PROJECT_NOT_FOUND'});this.controllers.delete(build.id);return;}
     const workspaceRoot=join(this.root,build.projectId);
@@ -94,6 +94,6 @@ export class ApplicationBuildWorker {
       if(current?.status==='cancelled') return;
       await this.store.addBuildEvent({buildId:build.id,eventType:controller.signal.aborted?'build.cancelled':'build.failed',phase:controller.signal.aborted?'cancelled':'failed',payload:{errorCode:message}});
       await this.store.updateBuild(build.id,{status:controller.signal.aborted?'cancelled':'failed',phase:controller.signal.aborted?'cancelled':'failed',errorCode:message});
-    }finally{this.controllers.delete(build.id);}
+    }finally{clearInterval(heartbeat);this.controllers.delete(build.id);}
   }
 }
