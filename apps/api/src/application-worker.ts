@@ -37,10 +37,12 @@ export class ApplicationBuildWorker {
       }
       await mkdir(workspaceRoot,{recursive:true});
       const request=build.request as {prompt:string;maxIterations?:number;maxRepairAttempts?:number};
+      const persistedSteps=await this.store.getBuildSteps(build.id);
+      const resumeFrom=persistedSteps.filter(step=>step.status==='completed').map(step=>({stepKey:step.stepKey,phase:step.phase as any,blueprint:step.output && typeof step.output==='object' ? (step.output as Record<string,unknown>).blueprint as any : undefined,repairAttempts:step.output && typeof step.output==='object' ? Number((step.output as Record<string,unknown>).repairAttempts??0) : 0}));
       const builder=createApplicationBuilder({model:createConfiguredModelProvider()});
       await this.store.upsertBuildStep({buildId:build.id,stepKey:'plan',phase:'planning',status:'running'});
       await this.store.addBuildEvent({buildId:build.id,eventType:'phase.started',phase:'planning'});
-      const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3},controller.signal);
+      const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3,resumeFrom,checkpoint:async checkpoint=>{await this.store.upsertBuildStep({buildId:build.id,stepKey:checkpoint.stepKey,phase:checkpoint.phase,status:'completed',attempt:1,output:{blueprint:checkpoint.blueprint,repairAttempts:checkpoint.repairAttempts}});await this.store.updateBuild(build.id,{status:'building',phase:checkpoint.phase,repairAttempts:checkpoint.repairAttempts});}},controller.signal);
       const phaseMap:Record<string,string>={plan:'planning',scaffold:'scaffolding',code:'coding',install:'installing',test:'testing',repair:'repairing',validate:'validating'};
       for(const step of result.completedSteps) await this.store.upsertBuildStep({buildId:build.id,stepKey:step,phase:phaseMap[step]??result.phase,status:'completed'});
       if(result.phase==='completed' && result.blueprint){
