@@ -1,7 +1,7 @@
 import { mkdir, readdir, stat, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
-import { createConfiguredModelProvider, createApplicationBuilder } from '@nexaforge/ai-core';
+import { createConfiguredModelProvider, createApplicationBuilder, createContainerManifest } from '@nexaforge/ai-core';
 import type { ApplicationRepository, ApplicationBuildRecord } from '@nexaforge/db';
 
 const SECRET_FILE = /(^|\/)(\.env(?:\..*)?|credentials?\.(json|ya?ml)|.*\.(pem|key|p12|pfx))$/i;
@@ -43,6 +43,10 @@ export class ApplicationBuildWorker {
       const phaseMap:Record<string,string>={plan:'planning',scaffold:'scaffolding',code:'coding',install:'installing',test:'testing',repair:'repairing',validate:'validating'};
       for(const step of result.completedSteps) await this.store.upsertBuildStep({buildId:build.id,stepKey:step,phase:phaseMap[step]??result.phase,status:'completed'});
       if(result.phase==='completed' && result.blueprint){
+        const container = createContainerManifest(result.blueprint);
+        const { writeFile } = await import('node:fs/promises');
+        await writeFile(join(workspaceRoot, 'Dockerfile'), container.dockerfile, 'utf8');
+        await this.store.addBuildEvent({buildId:build.id,eventType:'artifact.container_manifest',phase:'validating',payload:{port:container.port,healthcheck:container.healthcheck}});
         const version=await this.store.createProjectVersion({projectId:project.id,blueprint:result.blueprint});
         const artifacts=await collectArtifacts(workspaceRoot);
         for(const artifact of artifacts) await this.store.addArtifact({projectVersionId:version.id,path:artifact.path,kind:artifact.kind,contentHash:artifact.hash,sizeBytes:artifact.size});
