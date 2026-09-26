@@ -62,7 +62,6 @@ export class ApplicationBuildWorker {
         const manifest = createWorkspaceArtifactManifest(project.id, build.id, source, artifactFiles);
         let deploymentSource: ApplicationDeploymentSource = source;
         const deploymentArtifactManifest = manifest as unknown as Record<string, unknown>;
-        let image: ApplicationDeploymentSource = source;
         let image: { reference:string; digest?:string; registry?:string } | undefined;
 
         if (process.env.APPLICATION_IMAGE_BUILD === 'true') {
