@@ -2,8 +2,6 @@ import { join } from 'node:path';
 import type { ApplicationRepository } from '@nexaforge/db';
 import { createLocalDeployer } from '@nexaforge/ai-core';
 
-const terminalStatuses = new Set(['ready', 'failed', 'cancelled']);
-
 export class ApplicationDeploymentWorker {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
@@ -45,6 +43,11 @@ export class ApplicationDeploymentWorker {
 
   private async process(deployment: Awaited<ReturnType<ApplicationRepository['claimNextDeployment']>> extends infer T ? Exclude<T, null> : never) {
     const buildId = deployment.buildId;
+    const project = await this.repository.getProject(deployment.projectId);
+    if (!project) {
+      await this.repository.updateDeployment(deployment.id, { status: 'failed', metadata: { error: 'APPLICATION_NOT_FOUND' } });
+      return;
+    }
     const workspaceRoot = join(process.env.APPLICATION_WORKSPACE_ROOT ?? '/tmp/nexaforge-projects', deployment.projectId);
     if (this.cancelled.has(deployment.id)) {
       await this.repository.updateDeployment(deployment.id, { status: 'cancelled', metadata: { reason: 'cancelled_before_start' } });
@@ -60,7 +63,8 @@ export class ApplicationDeploymentWorker {
         buildId: buildId ?? deployment.id,
         workspaceRoot,
         environment: deployment.environment,
-        name: deployment.projectId
+        name: project.name,
+        port: typeof (deployment.metadata as Record<string, unknown>).requestedPort === 'number' ? (deployment.metadata as Record<string, unknown>).requestedPort as number : undefined
       });
 
       await this.repository.updateDeployment(deployment.id, {
