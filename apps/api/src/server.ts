@@ -2,15 +2,18 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { createTaskRepository, type TaskRepository, type TaskRecord, type TaskEventRecord } from '@nexaforge/db';
+import { createTaskRepository, createApplicationRepository, type TaskRepository, type TaskRecord, type TaskEventRecord } from '@nexaforge/db';
 import type { AgentMode } from '@nexaforge/shared';
 import { configuredWorker, type TaskWorker } from './task-worker';
+import { ApplicationBuildWorker } from './application-worker';
 
 const app = Fastify({ logger: true });
 const memoryTasks = new Map<string, TaskRecord>();
 const memoryEvents = new Map<string, TaskEventRecord[]>();
 const repository: TaskRepository | null = createTaskRepository();
 const worker: TaskWorker | null = repository ? configuredWorker(repository) : null;
+const applicationRepository = createApplicationRepository();
+const applicationWorker = applicationRepository ? new ApplicationBuildWorker(applicationRepository) : null;
 
 const taskSchema = z.object({
   prompt: z.string().min(1).max(20000),
@@ -52,6 +55,52 @@ app.post('/api/v1/dev/bootstrap', async (request, reply) => {
     request.log.error(error);
     return reply.code(500).send({ error: 'BOOTSTRAP_FAILED' });
   }
+});
+
+const applicationCreateSchema = z.object({
+  workspaceId: z.string().uuid(),
+  name: z.string().min(1).max(120),
+  description: z.string().max(1000).optional(),
+});
+const applicationBuildSchema = z.object({
+  prompt: z.string().min(1).max(20000),
+  maxIterations: z.number().int().min(1).max(50).default(12),
+  maxRepairAttempts: z.number().int().min(0).max(10).default(3),
+});
+
+app.post('/api/v1/applications', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const parsed=applicationCreateSchema.safeParse(request.body);
+  if(!parsed.success)return reply.code(400).send({error:'INVALID_REQUEST',details:parsed.error.flatten()});
+  if(!(await repository?.workspaceExists(parsed.data.workspaceId))) return reply.code(404).send({error:'WORKSPACE_NOT_FOUND'});
+  try{return reply.code(201).send(await applicationRepository.createProject(parsed.data));}
+  catch(error){request.log.error(error);return reply.code(500).send({error:'APPLICATION_CREATE_FAILED'});}
+});
+
+app.post('/api/v1/applications/:id/builds', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const {id}=request.params as {id:string};
+  const parsed=applicationBuildSchema.safeParse(request.body);
+  if(!parsed.success)return reply.code(400).send({error:'INVALID_REQUEST',details:parsed.error.flatten()});
+  if(!(await applicationRepository.getProject(id)))return reply.code(404).send({error:'APPLICATION_NOT_FOUND'});
+  try{return reply.code(202).send(await applicationRepository.createBuild({projectId:id,request:parsed.data}));}
+  catch(error){request.log.error(error);return reply.code(500).send({error:'APPLICATION_BUILD_CREATE_FAILED'});}
+});
+
+app.get('/api/v1/applications/:id', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const {id}=request.params as {id:string};
+  const project=await applicationRepository.getProject(id);
+  if(!project)return reply.code(404).send({error:'APPLICATION_NOT_FOUND'});
+  return project;
+});
+
+app.get('/api/v1/application-builds/:id', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const {id}=request.params as {id:string};
+  const build=await applicationRepository.getBuild(id);
+  if(!build)return reply.code(404).send({error:'APPLICATION_BUILD_NOT_FOUND'});
+  return build;
 });
 
 app.post('/api/v1/tasks', async (request, reply) => {
@@ -203,6 +252,7 @@ app.post('/api/v1/tasks/:id/cancel', async (request, reply) => {
 
 const shutdown = async () => {
   worker?.stop();
+  applicationWorker?.stop();
   await app.close();
 };
 
@@ -211,4 +261,5 @@ process.once('SIGTERM', () => { void shutdown().finally(() => process.exit(0)); 
 
 app.listen({ port: Number(process.env.PORT ?? 4000), host: process.env.HOST ?? '0.0.0.0' }).then(() => {
   worker?.start();
+  applicationWorker?.start();
 }).catch(error => { app.log.error(error); process.exit(1); });
