@@ -67,13 +67,13 @@ export class TaskWorker {
     try {
       const model = createConfiguredModelProvider();
       const registry = createToolRegistry(workerTools);
-      const runtime = createSupervisor(registry.list(), model);
+      const runtime = createSupervisor(registry.list(), model, registry);
       const executor = new BoundedAgentExecutor(runtime, registry);
       await this.store.updateStatus(task.id, 'running');
       await this.store.addEvent(task.id, 'task.running', {});
       if (controller.signal.aborted) throw new Error('TASK_CANCELLED');
 
-      const result = await executor.run(toAgentTask({ ...task, status: 'running' }));
+      const result = await executor.run(toAgentTask({ ...task, status: 'running' }), controller.signal);
       if (controller.signal.aborted) throw new Error('TASK_CANCELLED');
 
       const status = result.status;
