@@ -9,12 +9,12 @@ function sleep(ms:number, signal?:AbortSignal){return new Promise<void>((resolve
 
 function renderName(name:string){const value=name.toLowerCase().replace(/[^a-z0-9-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,55);return value||'nexaforge-app';}
 
-
 export type DeploymentStatus = 'queued' | 'deploying' | 'ready' | 'failed' | 'cancelled';
 
 export interface ApplicationDeploymentRequest {
   projectId: string;
   buildId: string;
+  deploymentId?: string;
   source: ApplicationDeploymentSource;
   environment: string;
   name: string;
@@ -82,6 +82,12 @@ export function createRenderImageDeployer(options: RenderImageDeployerOptions = 
     return response.json() as Promise<any>;
   };
 
+  const findExistingService = async (name:string) => {
+    const result = await request(`/services?ownerId=${encodeURIComponent(ownerId!)}&name=${encodeURIComponent(name)}&limit=1`);
+    const first = Array.isArray(result) ? result[0] : undefined;
+    return first?.service ?? null;
+  };
+
   return {
     async deploy(requestInput, signal) {
       if (signal?.aborted) return {status:'cancelled',provider:'render'};
@@ -91,29 +97,46 @@ export function createRenderImageDeployer(options: RenderImageDeployerOptions = 
       const imagePath = requestInput.source.digest
         ? `${requestInput.source.reference.split('@')[0]}@${requestInput.source.digest}`
         : requestInput.source.reference;
+      const serviceName = renderName(`${requestInput.name}-${requestInput.projectId.slice(0,8)}-${(requestInput.deploymentId ?? requestInput.buildId).slice(0,8)}`);
 
-      const created = await request('/services', {
-        method:'POST',
-        body: JSON.stringify({
-          type:'web_service',
-          name:renderName(requestInput.name + '-' + requestInput.projectId.slice(0,8)),
-          ownerId,
-          autoDeploy:'no',
-          image:{imagePath},
-          serviceDetails:{buildPlan:plan,region,healthCheckPath:healthPath}
-        })
-      });
+      let service = await findExistingService(serviceName);
+      let deployId = '';
 
-      const service = created.service ?? created;
+      if (!service) {
+        const created = await request('/services', {
+          method:'POST',
+          body: JSON.stringify({
+            type:'web_service',
+            name:serviceName,
+            ownerId,
+            autoDeploy:'no',
+            image:{imagePath},
+            serviceDetails:{buildPlan:plan,region,healthCheckPath:healthPath}
+          })
+        });
+        service = created.service ?? created;
+        deployId = String(created.deployId ?? '');
+      } else {
+        const existingImage = typeof service.imagePath === 'string' ? service.imagePath.split('@')[0] : '';
+        const requestedImage = imagePath.split('@')[0];
+        if (existingImage && existingImage !== requestedImage) {
+          throw new Error('RENDER_IDEMPOTENCY_IMAGE_MISMATCH');
+        }
+        const triggered = await request(`/services/${encodeURIComponent(String(service.id))}/deploys`, {
+          method:'POST',
+          body: JSON.stringify({ imageUrl: imagePath })
+        });
+        deployId = String(triggered.id ?? '');
+      }
+
       const serviceId = String(service.id ?? '');
       if (!serviceId) throw new Error('RENDER_SERVICE_ID_MISSING');
-      const deployId = String(created.deployId ?? '');
       const deadline = Date.now() + timeoutMs;
-      let deploy:any = created;
+      let deploy:any = { status: 'created' };
       while (Date.now() < deadline) {
         if (signal?.aborted) {
           if (deployId) { try { await request(`/services/${serviceId}/deploys/${deployId}/cancel`,{method:'POST'}); } catch {} }
-          return {status:'cancelled',provider:'render',externalId:deployId || serviceId};
+          return {status:'cancelled',provider:'render',externalId:deployId ? `${serviceId}:${deployId}` : serviceId};
         }
         if (deployId) deploy = await request(`/services/${serviceId}/deploys/${deployId}`);
         const status = String(deploy.status ?? '');
