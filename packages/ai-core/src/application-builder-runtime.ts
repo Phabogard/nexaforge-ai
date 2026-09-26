@@ -155,12 +155,61 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
         phase = 'validating';
         const build = await verifier.build(signal);
         if (!build.ok) throw new Error('BUILD_FAILED');
-        const runtime = await verifier.validateRuntime(signal);
-        if (!runtime.ok) throw new Error('RUNTIME_VALIDATION_FAILED');
+        let browser = has('browser') ? { ok: true, stage: 'browser' as const, diagnostics: ['browser validation resumed from checkpoint'] } : await verifier.validateBrowser(signal);
+        while (!browser.ok && repairAttempts < request.maxRepairAttempts) {
+          phase = 'repairing';
+          repairAttempts++;
+          checkAbort();
+          await checkpoint('repair', 'repairing', 'running', { diagnostics: browser });
+          const repairTools = createApplicationTools({ workspace, verifier, packageManager: blueprint.packageManager, cwd: '.' });
+          const repairAgent = createApplicationCodingAgent({ model: options.model, tools: repairTools.tools });
+          const repair = await repairAgent.run({
+            prompt: [
+              'Repair the application using the browser validation diagnostics below.',
+              'Inspect the relevant files and make the smallest correct changes.',
+              'Run tests, build and runtime validation after changes.',
+              'Do not merely describe a patch: modify the workspace.',
+              'Browser diagnostics:', JSON.stringify(browser)
+            ].join('\\n'),
+            blueprint,
+            workspaceRoot: request.workspaceRoot,
+            maxIterations: Math.max(2, Math.ceil(request.maxIterations / 2)),
+            taskId: request.projectId,
+            signal
+          });
+          if (!repair.completed) {
+            await checkpoint('repair', 'repairing', 'failed', { diagnostics: browser, calls: repair.calls }, 'REPAIR_AGENT_MAX_ITERATIONS');
+            throw new Error('REPAIR_AGENT_MAX_ITERATIONS');
+          }
+          const repairedTests = await verifier.test(signal);
+          if (!repairedTests.ok) {
+            browser = { ok: false, stage: 'browser', diagnostics: ['repair introduced or left test failures', ...repairedTests.diagnostics] };
+          } else {
+            const repairedBuild = await verifier.build(signal);
+            if (!repairedBuild.ok) {
+              browser = { ok: false, stage: 'browser', diagnostics: ['repair introduced or left build failures', ...repairedBuild.diagnostics] };
+            } else {
+              const repairedRuntime = await verifier.validateRuntime(signal);
+              if (!repairedRuntime.ok) {
+                browser = { ok: false, stage: 'browser', diagnostics: ['repair introduced or left runtime failures', ...repairedRuntime.diagnostics] };
+              } else {
+                browser = await verifier.validateBrowser(signal);
+              }
+            }
+          }
+          if (!browser.ok && repairAttempts >= request.maxRepairAttempts) {
+            await checkpoint('repair', 'repairing', 'failed', { diagnostics: browser, calls: repair.calls }, 'BROWSER_VALIDATION_FAILED');
+          } else {
+            await checkpoint('repair', 'repairing', 'completed', { diagnostics: browser, calls: repair.calls });
+          }
+        }
+
+        if (!browser.ok) throw new Error('BROWSER_VALIDATION_FAILED');
         if (repairAttempts > 0 && !has('repair')) await checkpoint('repair','repairing');
         if (!has('validate')) await checkpoint('validate','validating');
+        if (!has('browser')) await checkpoint('browser','validating', 'completed', { diagnostics: browser });
 
-        return { projectId: request.projectId, phase: 'completed', blueprint, completedSteps, repairAttempts, summary: 'Application generated, tested and validated.' };
+        return { projectId: request.projectId, phase: 'completed', blueprint, completedSteps, repairAttempts, summary: 'Application generated, tested, runtime-validated and browser-validated.' };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'APPLICATION_BUILD_FAILED';
         phase = message === 'APPLICATION_BUILD_CANCELLED' ? 'cancelled' : 'failed';
