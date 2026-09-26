@@ -99,7 +99,12 @@ app.post('/api/v1/applications/:id/deployments', async (request, reply) => {
     buildId: z.string().uuid(),
     provider: z.enum(['local']).default('local'),
     environment: z.string().min(1).max(64).default('production'),
-    port: z.number().int().min(1).max(65535).optional()
+    port: z.number().int().min(1).max(65535).optional(),
+    source: z.discriminatedUnion('type', [
+      z.object({ type: z.literal('workspace'), workspaceRoot: z.string().min(1).max(500) }),
+      z.object({ type: z.literal('git'), repository: z.string().min(1).max(500), revision: z.string().min(1).max(200), subdirectory: z.string().min(1).max(240).optional() }),
+      z.object({ type: z.literal('image'), reference: z.string().min(1).max(500), digest: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(), registry: z.string().max(300).optional() })
+    ]).optional()
   }).safeParse(request.body);
   if (!body.success) return reply.code(400).send({ error: 'INVALID_REQUEST', details: body.error.flatten() });
 
@@ -114,7 +119,7 @@ app.post('/api/v1/applications/:id/deployments', async (request, reply) => {
     buildId: build.id,
     provider: body.data.provider,
     environment: body.data.environment,
-    metadata: { requestedPort: body.data.port ?? null }
+    metadata: { requestedPort: body.data.port ?? null, source: body.data.source ?? null }
   });
   await applicationRepository.addBuildEvent({
     buildId: build.id,
