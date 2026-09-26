@@ -51,6 +51,7 @@ export class ApplicationDeploymentWorker {
     this.controllers.set(deployment.id, controller);
     const heartbeat = setInterval(() => { void this.repository.renewDeploymentLease(deployment.id, this.workerId, this.leaseSeconds).catch(() => {}); }, 20000);
     const buildId = deployment.buildId;
+    try {
     const project = await this.repository.getProject(deployment.projectId);
     if (!project) {
       await this.repository.updateDeployment(deployment.id, { status: 'failed', metadata: { error: 'APPLICATION_NOT_FOUND' } });
@@ -74,7 +75,6 @@ export class ApplicationDeploymentWorker {
       return;
     }
 
-    try {
       const provider = deployment.provider === 'local' ? createLocalDeployer() : deployment.provider === 'render' ? createRenderImageDeployer() : null;
       if (!provider) throw new Error('UNSUPPORTED_DEPLOYMENT_PROVIDER');
 
