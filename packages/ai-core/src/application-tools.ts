@@ -36,7 +36,7 @@ export function createApplicationTools(deps: ApplicationToolDependencies): Appli
       return deps.workspace.exec({command:value.command,args:value.args??[],cwd:value.cwd??cwd,timeoutMs:value.timeoutMs??30000},context.signal);
     }},
     { name:'package.install', description:'Install project dependencies using the configured package manager', risk:'high', async execute(_input, context) {
-      const manager=deps.packageManager??'pnpm'; const args=manager==='npm'?['install']:manager==='yarn'?['install']:manager==='bun'?['install']:['install','--frozen-lockfile'];
+      const manager=deps.packageManager??'pnpm'; const args=manager==='npm'?['install']:manager==='yarn'?['install']:manager==='bun'?['install']:['install','--no-frozen-lockfile'];
       return deps.workspace.exec({command:manager,args,cwd,timeoutMs:120000},context.signal);
     }},
     { name:'git.init', description:'Initialize git metadata for the generated project', risk:'medium', async execute(_input, context) {
