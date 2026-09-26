@@ -69,10 +69,10 @@ const applicationBuildSchema = z.object({
 });
 
 app.post('/api/v1/applications', async (request, reply) => {
-  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  if (!applicationRepository || !repository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
   const parsed=applicationCreateSchema.safeParse(request.body);
   if(!parsed.success)return reply.code(400).send({error:'INVALID_REQUEST',details:parsed.error.flatten()});
-  if(!(await repository?.workspaceExists(parsed.data.workspaceId))) return reply.code(404).send({error:'WORKSPACE_NOT_FOUND'});
+  if(!(await repository.workspaceExists(parsed.data.workspaceId))) return reply.code(404).send({error:'WORKSPACE_NOT_FOUND'});
   try{return reply.code(201).send(await applicationRepository.createProject(parsed.data));}
   catch(error){request.log.error(error);return reply.code(500).send({error:'APPLICATION_CREATE_FAILED'});}
 });
@@ -111,13 +111,76 @@ app.get('/api/v1/application-builds/:id/events', async (request, reply) => {
   return { events: await applicationRepository.listBuildEvents(id) };
 });
 
+app.get('/api/v1/application-builds/:id/stream', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const { id } = request.params as { id: string };
+  const initial = await applicationRepository.getBuild(id);
+  if (!initial) return reply.code(404).send({ error: 'APPLICATION_BUILD_NOT_FOUND' });
+
+  reply.hijack();
+  const response = reply.raw;
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  let closed = false;
+  let timer: NodeJS.Timeout | undefined;
+  let cursor = 0;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    if (timer) clearTimeout(timer);
+    request.raw.off('close', cleanup);
+    if (!response.destroyed) response.end();
+  };
+  request.raw.on('close', cleanup);
+
+  const send = (event: string, data: unknown, id?: string) => {
+    if (closed || response.destroyed) return;
+    if (id) response.write(`id: ${id}\n`);
+    response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  send('build.snapshot', initial, initial.id);
+
+  const tick = async () => {
+    if (closed) return;
+    try {
+      const build = await applicationRepository.getBuild(id);
+      if (!build) {
+        send('error', { error: 'APPLICATION_BUILD_NOT_FOUND' });
+        cleanup();
+        return;
+      }
+      const events = await applicationRepository.listBuildEvents(id);
+      for (const event of events.slice(cursor)) {
+        send(event.eventType, event.payload, event.id);
+      }
+      cursor = events.length;
+      send('build.snapshot', build, build.id);
+      if (terminalStatuses.has(build.status) || build.phase === 'waiting_approval') {
+        send('done', { status: build.status, phase: build.phase, buildId: build.id });
+        cleanup();
+        return;
+      }
+    } catch (error) {
+      send('error', { error: error instanceof Error ? error.message : 'STREAM_FAILED' });
+    }
+    if (!closed) timer = setTimeout(() => { void tick(); }, 500);
+  };
+  void tick();
+});
+
 app.post('/api/v1/application-builds/:id/cancel', async (request, reply) => {
   if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
   const { id } = request.params as { id: string };
   const build = await applicationRepository.getBuild(id);
   if (!build) return reply.code(404).send({ error: 'APPLICATION_BUILD_NOT_FOUND' });
-  const updated = await applicationRepository.updateBuild(id, { status: 'cancelled', phase: 'cancelled', errorCode: 'CANCELLED_BY_USER' });
   applicationWorker?.cancel(id);
+  const updated = await applicationRepository.updateBuild(id, { status: 'cancelled', phase: 'cancelled', errorCode: 'CANCELLED_BY_USER' });
   await applicationRepository.addBuildEvent({ buildId: id, eventType: 'build.cancelled', phase: 'cancelled', payload: { reason: 'user_request' } });
   return updated;
 });
