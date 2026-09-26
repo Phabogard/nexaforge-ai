@@ -52,28 +52,28 @@ export class ApplicationDeploymentWorker {
     const heartbeat = setInterval(() => { void this.repository.renewDeploymentLease(deployment.id, this.workerId, this.leaseSeconds).catch(() => {}); }, 20000);
     const buildId = deployment.buildId;
     try {
-    const project = await this.repository.getProject(deployment.projectId);
-    if (!project) {
-      await this.repository.updateDeployment(deployment.id, { status: 'failed', metadata: { error: 'APPLICATION_NOT_FOUND' } });
-      return;
-    }
+      const project = await this.repository.getProject(deployment.projectId);
+      if (!project) {
+        await this.repository.updateDeployment(deployment.id, { status: 'failed', metadata: { error: 'APPLICATION_NOT_FOUND' } });
+        return;
+      }
 
-    const metadata = (deployment.metadata ?? {}) as Record<string, unknown>;
-    let source;
-    try {
-      source = metadata.source
-        ? parseDeploymentSource(metadata.source)
-        : { type: 'workspace' as const, workspaceRoot: join(process.env.APPLICATION_WORKSPACE_ROOT ?? '/tmp/nexaforge-projects', deployment.projectId) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'INVALID_DEPLOYMENT_SOURCE';
-      await this.repository.updateDeployment(deployment.id, { status: 'failed', metadata: { error: message } });
-      return;
-    }
+      const metadata = (deployment.metadata ?? {}) as Record<string, unknown>;
+      let source;
+      try {
+        source = metadata.source
+          ? parseDeploymentSource(metadata.source)
+          : { type: 'workspace' as const, workspaceRoot: join(process.env.APPLICATION_WORKSPACE_ROOT ?? '/tmp/nexaforge-projects', deployment.projectId) };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'INVALID_DEPLOYMENT_SOURCE';
+        await this.repository.updateDeployment(deployment.id, { status: 'failed', metadata: { error: message } });
+        return;
+      }
 
-    if (this.cancelled.has(deployment.id)) {
-      await this.repository.updateDeployment(deployment.id, { status: 'cancelled', metadata: { reason: 'cancelled_before_start' } });
-      return;
-    }
+      if (this.cancelled.has(deployment.id)) {
+        await this.repository.updateDeployment(deployment.id, { status: 'cancelled', metadata: { reason: 'cancelled_before_start' } });
+        return;
+      }
 
       const provider = deployment.provider === 'local' ? createLocalDeployer() : deployment.provider === 'render' ? createRenderImageDeployer() : null;
       if (!provider) throw new Error('UNSUPPORTED_DEPLOYMENT_PROVIDER');
@@ -81,6 +81,7 @@ export class ApplicationDeploymentWorker {
       const result = await provider.deploy({
         projectId: deployment.projectId,
         buildId: buildId ?? deployment.id,
+        deploymentId: deployment.id,
         source,
         environment: deployment.environment,
         name: project.name,
@@ -107,7 +108,7 @@ export class ApplicationDeploymentWorker {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'DEPLOYMENT_FAILED';
-      await this.repository.updateDeployment(deployment.id, { status: 'failed', metadata: { ...metadata, error: message } });
+      await this.repository.updateDeployment(deployment.id, { status: 'failed', metadata: { ...((deployment.metadata ?? {}) as Record<string, unknown>), error: message } });
     } finally {
       clearInterval(heartbeat);
       this.controllers.delete(deployment.id);
