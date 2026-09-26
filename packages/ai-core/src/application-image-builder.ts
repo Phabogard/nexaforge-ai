@@ -100,7 +100,7 @@ export function createDockerImageBuilder(options: DockerImageBuilderOptions = {}
       try {
         buildOutput = await executor.exec(
           dockerExecutable,
-          ['build', '--file', 'Dockerfile', '--tag', reference, '.'],
+          ['build', '--platform', 'linux/amd64', '--file', 'Dockerfile', '--tag', reference, '.'],
           workspaceRoot,
           signal
         );
