@@ -8,6 +8,8 @@ import { createBuildVerifier, type BuildVerifier } from './build-verifier';
 import { createWorkspaceSandbox } from './workspace-sandbox';
 import type { WorkspacePathPolicy } from './workspace-tools';
 import { normalizeDependencySpec, validateProjectPath } from './application-policy';
+import { createApplicationTools } from './application-tools';
+import { createApplicationCodingAgent } from './application-coding-agent';
 
 interface GeneratedFile { path: string; content: string; }
 interface ApplicationBuilderOptions {
@@ -85,29 +87,24 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           ? options.verifierFactory(request.workspaceRoot, blueprint)
           : createBuildVerifier({ workspace, packageManager: blueprint.packageManager, cwd: '.' });
 
-        const generationPrompt = [
-          'You are the NexaForge coding agent.',
-          'Generate a complete runnable application from the validated blueprint below.',
-          'Return ONLY JSON: an array of { "path": "relative/path", "content": "full file contents" }.',
-          'Never use absolute paths, secrets, host-specific paths, destructive scripts, or shell pipelines.',
-          'Include every file required for install, test, build and start.',
-          JSON.stringify(blueprint)
-        ].join('\n');
-
-        if (has('code')) { phase = 'installing'; }
-        const generated = has('code') ? [] : parseFiles(await options.model.generate({
-          system: generationPrompt,
-          messages: [{ role: 'user', content: request.prompt }]
-        }));
-        for (const file of generated) {
-          checkAbort();
-          await workspace.writeFile(file.path, file.content, signal);
+        if (!has('code')) {
+          const codingTools = createApplicationTools({ workspace, verifier, packageManager: blueprint.packageManager, cwd: '.' });
+          const codingAgent = createApplicationCodingAgent({ model: options.model, tools: codingTools.tools });
+          const coding = await codingAgent.run({
+            prompt: request.prompt,
+            blueprint,
+            workspaceRoot: request.workspaceRoot,
+            maxIterations: Math.max(1, request.maxIterations),
+            taskId: request.projectId,
+            signal
+          });
+          if (!coding.completed) throw new Error('CODING_AGENT_MAX_ITERATIONS');
+          if (!coding.calls.some(call => call.tool === 'filesystem.write')) {
+            await workspace.writeFile('package.json', packageJson(blueprint), signal);
+          }
+          await checkpoint('scaffold','scaffolding');
+          await checkpoint('code','coding');
         }
-        if (!generated.some(file => file.path === 'package.json')) {
-          await workspace.writeFile('package.json', packageJson(blueprint), signal);
-        }
-        if (!has('scaffold')) await checkpoint('scaffold','scaffolding');
-        if (!has('code')) await checkpoint('code','coding');
 
         phase = 'installing';
         checkAbort();
