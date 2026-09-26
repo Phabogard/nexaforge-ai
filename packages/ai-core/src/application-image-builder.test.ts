@@ -30,7 +30,7 @@ describe('docker image builder', () => {
     expect(executor.exec).toHaveBeenNthCalledWith(
       1,
       'docker',
-      ['build', '--file', 'Dockerfile', '--tag', 'nexaforge/app:build-1', '.'],
+      ['build', '--platform', 'linux/amd64', '--file', 'Dockerfile', '--tag', 'nexaforge/app:build-1', '.'],
       '/tmp/app',
       undefined
     );
