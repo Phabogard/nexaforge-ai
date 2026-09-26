@@ -44,6 +44,7 @@ export type ApplicationBuildRecord={id:string;projectId:string;status:string;pha
 export type ApplicationBuildStepRecord={id:string;buildId:string;stepKey:string;phase:string;status:string;attempt:number;input?:unknown;output?:unknown;errorCode?:string|null};
 export type ApplicationBuildEventRecord={id:string;buildId:string;eventType:string;phase:string;payload:unknown;createdAt:string};
 export type ApplicationBuildApprovalRecord={id:string;buildId:string;stepKey:string;status:string;reason:string;decidedAt?:string|null;createdAt:string};
+export type ApplicationDeploymentRecord={id:string;projectId:string;buildId:string|null;provider:string;environment:string;status:string;externalId?:string|null;url?:string|null;metadata:unknown;createdAt:string;completedAt?:string|null};
 export interface ApplicationRepository{
  createProject(input:{workspaceId:string;name:string;description?:string}):Promise<ApplicationProjectRecord>;
  getProject(id:string):Promise<ApplicationProjectRecord|null>;
@@ -60,6 +61,10 @@ export interface ApplicationRepository{
  createProjectVersion(input:{projectId:string;blueprint:unknown}):Promise<{id:string;projectId:string;version:number;blueprint:unknown;createdAt:string}>;
  addArtifact(input:{projectVersionId:string;path:string;kind:string;contentHash:string;sizeBytes:number}):Promise<void>;
  listArtifacts(projectVersionId:string):Promise<Array<{id:string;projectVersionId:string;path:string;kind:string;contentHash:string;sizeBytes:number;createdAt:string}>>;
+ createDeployment(input:{projectId:string;buildId?:string;provider:string;environment?:string;metadata?:unknown}):Promise<ApplicationDeploymentRecord>;
+ getDeployment(id:string):Promise<ApplicationDeploymentRecord|null>;
+ updateDeployment(id:string,input:{status:string;externalId?:string;url?:string;metadata?:unknown}):Promise<ApplicationDeploymentRecord|null>;
+ listDeployments(projectId:string):Promise<ApplicationDeploymentRecord[]>;
 }
 
 export interface TaskRepository {
@@ -179,6 +184,8 @@ export function createTaskRepository(databaseUrl = process.env.DATABASE_URL): Ta
 
 const applicationProject=(r:Record<string,unknown>):ApplicationProjectRecord=>({id:String(r.id),workspaceId:String(r.workspace_id),name:String(r.name),description:String(r.description??''),status:String(r.status),createdAt:new Date(String(r.created_at)).toISOString(),updatedAt:new Date(String(r.updated_at)).toISOString()});
 const applicationBuild=(r:Record<string,unknown>):ApplicationBuildRecord=>({id:String(r.id),projectId:String(r.project_id),status:String(r.status),phase:String(r.phase),request:r.request,result:r.result??undefined,errorCode:r.error_code?String(r.error_code):null,repairAttempts:Number(r.repair_attempts??0),createdAt:new Date(String(r.created_at)).toISOString(),completedAt:r.completed_at?new Date(String(r.completed_at)).toISOString():null});
+const applicationDeployment=(r:Record<string,unknown>):ApplicationDeploymentRecord=>({id:String(r.id),projectId:String(r.project_id),buildId:r.build_id?String(r.build_id):null,provider:String(r.provider),environment:String(r.environment),status:String(r.status),externalId:r.external_id?String(r.external_id):null,url:r.url?String(r.url):null,metadata:r.metadata??{},createdAt:new Date(String(r.created_at)).toISOString(),completedAt:r.completed_at?new Date(String(r.completed_at)).toISOString():null});
+
 
 export function createApplicationRepository(databaseUrl=process.env.DATABASE_URL):ApplicationRepository|null{
  if(!databaseUrl)return null;
@@ -198,6 +205,10 @@ export function createApplicationRepository(databaseUrl=process.env.DATABASE_URL
   async createProjectVersion(i){const n=await sql`SELECT COALESCE(MAX(version),0)+1 AS next FROM application_project_versions WHERE project_id=${i.projectId}::uuid`;const version=Number((n[0] as Record<string,unknown>).next);const r=await sql`INSERT INTO application_project_versions(project_id,version,blueprint) VALUES(${i.projectId}::uuid,${version},${JSON.stringify(i.blueprint)}::jsonb) RETURNING *`;const x=r[0] as Record<string,unknown>;return{id:String(x.id),projectId:String(x.project_id),version:Number(x.version),blueprint:x.blueprint,createdAt:new Date(String(x.created_at)).toISOString()};},
   async addArtifact(i){await sql`INSERT INTO application_artifacts(project_version_id,path,kind,content_hash,size_bytes) VALUES(${i.projectVersionId}::uuid,${i.path},${i.kind},${i.contentHash},${i.sizeBytes}) ON CONFLICT(project_version_id,path) DO UPDATE SET kind=EXCLUDED.kind,content_hash=EXCLUDED.content_hash,size_bytes=EXCLUDED.size_bytes`;},
   async listArtifacts(projectVersionId){const r=await sql`SELECT * FROM application_artifacts WHERE project_version_id=${projectVersionId}::uuid ORDER BY path ASC`;return r.map(x=>{const q=x as Record<string,unknown>;return{id:String(q.id),projectVersionId:String(q.project_version_id),path:String(q.path),kind:String(q.kind),contentHash:String(q.content_hash),sizeBytes:Number(q.size_bytes),createdAt:new Date(String(q.created_at)).toISOString()};});},
+  async listDeployments(projectId){const r=await sql`SELECT * FROM application_deployments WHERE project_id=${projectId}::uuid ORDER BY created_at DESC`;return r.map(x=>applicationDeployment(x as Record<string,unknown>));},
+  async createDeployment(i){const r=await sql`INSERT INTO application_deployments(project_id,build_id,provider,environment,metadata) VALUES(${i.projectId}::uuid,${i.buildId??null}::uuid,${i.provider},${i.environment??'production'},${JSON.stringify(i.metadata??{})}::jsonb) RETURNING *`;return applicationDeployment(r[0] as Record<string,unknown>);},
+  async getDeployment(id){const r=await sql`SELECT * FROM application_deployments WHERE id=${id}::uuid`;return r.length?applicationDeployment(r[0] as Record<string,unknown>):null;},
+  async updateDeployment(id,i){const terminal=['ready','failed','cancelled'];const r=await sql`UPDATE application_deployments SET status=${i.status},external_id=COALESCE(${i.externalId??null},external_id),url=COALESCE(${i.url??null},url),metadata=CASE WHEN ${i.metadata===undefined} THEN metadata ELSE ${JSON.stringify(i.metadata)}::jsonb END,completed_at=CASE WHEN ${terminal.includes(i.status)} THEN now() ELSE completed_at END WHERE id=${id}::uuid RETURNING *`;return r.length?applicationDeployment(r[0] as Record<string,unknown>):null;},
   async upsertBuildStep(i){const r=await sql`INSERT INTO application_build_steps(build_id,step_key,phase,status,attempt,input,output,error_code,started_at,completed_at) VALUES(${i.buildId}::uuid,${i.stepKey},${i.phase},${i.status},${i.attempt??0},${i.input===undefined?null:JSON.stringify(i.input)}::jsonb,${i.output===undefined?null:JSON.stringify(i.output)}::jsonb,${i.errorCode??null},CASE WHEN ${i.status}='running' THEN now() ELSE NULL END,CASE WHEN ${i.status} IN('completed','failed','cancelled') THEN now() ELSE NULL END) ON CONFLICT(build_id,step_key) DO UPDATE SET status=EXCLUDED.status,attempt=EXCLUDED.attempt,output=EXCLUDED.output,error_code=EXCLUDED.error_code,started_at=COALESCE(application_build_steps.started_at,EXCLUDED.started_at),completed_at=EXCLUDED.completed_at RETURNING *`;const x=r[0] as Record<string,unknown>;return{id:String(x.id),buildId:String(x.build_id),stepKey:String(x.step_key),phase:String(x.phase),status:String(x.status),attempt:Number(x.attempt),input:x.input??undefined,output:x.output??undefined,errorCode:x.error_code?String(x.error_code):null};}
  };
 }
