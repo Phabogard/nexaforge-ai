@@ -73,7 +73,8 @@ export { webSearchTool } from './web-search';
 export { OpenAICompatibleProvider, UnconfiguredModelProvider, createConfiguredModelProvider } from './model-provider';
 export * from './application-builder';
 export * from './workspace-tools';
+export { createWorkspaceSandbox } from './workspace-sandbox';
 export * from './build-verifier';
 
-export { applicationBuilderTools } from './application-tools';
+export { applicationBuilderTools, createApplicationTools } from './application-tools';
 export { createApplicationPlanner } from './application-planner';
