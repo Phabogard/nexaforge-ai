@@ -68,6 +68,7 @@ export { createWorkspaceSandbox } from './workspace-sandbox';
 export { createApplicationBuilder } from './application-builder-runtime';
 export * from './build-verifier';
 export * from './application-deployer';
+export * from './application-artifact';
 export { createApplicationTools } from './application-tools';
 export { createApplicationPlanner } from './application-planner';
 export * from './application-policy';
