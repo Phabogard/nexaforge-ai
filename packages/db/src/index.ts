@@ -38,6 +38,20 @@ export type WorkspaceRecord = {
   createdAt: string;
 };
 
+
+export type ApplicationProjectRecord={id:string;workspaceId:string;name:string;description:string;status:string;createdAt:string;updatedAt:string};
+export type ApplicationBuildRecord={id:string;projectId:string;status:string;phase:string;request:unknown;result?:unknown;errorCode?:string|null;repairAttempts:number;createdAt:string;completedAt?:string|null};
+export type ApplicationBuildStepRecord={id:string;buildId:string;stepKey:string;phase:string;status:string;attempt:number;input?:unknown;output?:unknown;errorCode?:string|null};
+export interface ApplicationRepository{
+ createProject(input:{workspaceId:string;name:string;description?:string}):Promise<ApplicationProjectRecord>;
+ getProject(id:string):Promise<ApplicationProjectRecord|null>;
+ createBuild(input:{projectId:string;request:unknown}):Promise<ApplicationBuildRecord>;
+ getBuild(id:string):Promise<ApplicationBuildRecord|null>;
+ claimNextBuild():Promise<ApplicationBuildRecord|null>;
+ updateBuild(id:string,input:{status:string;phase:string;result?:unknown;errorCode?:string;repairAttempts?:number}):Promise<ApplicationBuildRecord|null>;
+ upsertBuildStep(input:{buildId:string;stepKey:string;phase:string;status:string;attempt?:number;input?:unknown;output?:unknown;errorCode?:string}):Promise<ApplicationBuildStepRecord>;
+}
+
 export interface TaskRepository {
   create(input: CreateTaskInput): Promise<TaskRecord>;
   get(id: string): Promise<TaskRecord | null>;
@@ -150,4 +164,22 @@ class PostgresTaskRepository implements TaskRepository {
 export function createTaskRepository(databaseUrl = process.env.DATABASE_URL): TaskRepository | null {
   if (!databaseUrl) return null;
   return new PostgresTaskRepository(neon(databaseUrl));
+}
+
+
+const applicationProject=(r:Record<string,unknown>):ApplicationProjectRecord=>({id:String(r.id),workspaceId:String(r.workspace_id),name:String(r.name),description:String(r.description??''),status:String(r.status),createdAt:new Date(String(r.created_at)).toISOString(),updatedAt:new Date(String(r.updated_at)).toISOString()});
+const applicationBuild=(r:Record<string,unknown>):ApplicationBuildRecord=>({id:String(r.id),projectId:String(r.project_id),status:String(r.status),phase:String(r.phase),request:r.request,result:r.result??undefined,errorCode:r.error_code?String(r.error_code):null,repairAttempts:Number(r.repair_attempts??0),createdAt:new Date(String(r.created_at)).toISOString(),completedAt:r.completed_at?new Date(String(r.completed_at)).toISOString():null});
+
+export function createApplicationRepository(databaseUrl=process.env.DATABASE_URL):ApplicationRepository|null{
+ if(!databaseUrl)return null;
+ const sql=neon(databaseUrl);
+ return {
+  async createProject(i){const r=await sql`INSERT INTO application_projects(workspace_id,name,description) VALUES(${i.workspaceId}::uuid,${i.name},${i.description??''}) RETURNING *`;return applicationProject(r[0] as Record<string,unknown>);},
+  async getProject(id){const r=await sql`SELECT * FROM application_projects WHERE id=${id}::uuid`;return r.length?applicationProject(r[0] as Record<string,unknown>):null;},
+  async createBuild(i){const r=await sql`INSERT INTO application_builds(project_id,request) VALUES(${i.projectId}::uuid,${JSON.stringify(i.request)}::jsonb) RETURNING *`;return applicationBuild(r[0] as Record<string,unknown>);},
+  async getBuild(id){const r=await sql`SELECT * FROM application_builds WHERE id=${id}::uuid`;return r.length?applicationBuild(r[0] as Record<string,unknown>):null;},
+  async claimNextBuild(){const r=await sql`WITH n AS(SELECT id FROM application_builds WHERE status='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE application_builds SET status='building',phase='planning' WHERE id IN(SELECT id FROM n) RETURNING *`;return r.length?applicationBuild(r[0] as Record<string,unknown>):null;},
+  async updateBuild(id,i){const terminal=['completed','failed','cancelled'];const r=await sql`UPDATE application_builds SET status=${i.status},phase=${i.phase},result=${i.result===undefined?null:JSON.stringify(i.result)}::jsonb,error_code=${i.errorCode??null},repair_attempts=COALESCE(${i.repairAttempts??null},repair_attempts),completed_at=CASE WHEN ${terminal.includes(i.status)} THEN now() ELSE completed_at END WHERE id=${id}::uuid RETURNING *`;return r.length?applicationBuild(r[0] as Record<string,unknown>):null;},
+  async upsertBuildStep(i){const r=await sql`INSERT INTO application_build_steps(build_id,step_key,phase,status,attempt,input,output,error_code,started_at,completed_at) VALUES(${i.buildId}::uuid,${i.stepKey},${i.phase},${i.status},${i.attempt??0},${i.input===undefined?null:JSON.stringify(i.input)}::jsonb,${i.output===undefined?null:JSON.stringify(i.output)}::jsonb,${i.errorCode??null},CASE WHEN ${i.status}='running' THEN now() ELSE NULL END,CASE WHEN ${i.status} IN('completed','failed','cancelled') THEN now() ELSE NULL END) ON CONFLICT(build_id,step_key) DO UPDATE SET status=EXCLUDED.status,attempt=EXCLUDED.attempt,output=EXCLUDED.output,error_code=EXCLUDED.error_code,started_at=COALESCE(application_build_steps.started_at,EXCLUDED.started_at),completed_at=EXCLUDED.completed_at RETURNING *`;const x=r[0] as Record<string,unknown>;return{id:String(x.id),buildId:String(x.build_id),stepKey:String(x.step_key),phase:String(x.phase),status:String(x.status),attempt:Number(x.attempt),input:x.input??undefined,output:x.output??undefined,errorCode:x.error_code?String(x.error_code):null};}
+ };
 }
