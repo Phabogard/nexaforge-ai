@@ -6,6 +6,7 @@ import type {
 import { createApplicationPlanner } from './application-planner';
 import { createBuildVerifier, type BuildVerifier } from './build-verifier';
 import { createWorkspaceSandbox } from './workspace-sandbox';
+import { createContainerWorkspaceSandbox } from './container-workspace-sandbox';
 import type { WorkspacePathPolicy } from './workspace-tools';
 import { normalizeDependencySpec, validateProjectPath } from './application-policy';
 import { createApplicationTools } from './application-tools';
@@ -82,7 +83,9 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           allowExec: true,
           ...(options.sandboxPolicy ?? {})
         };
-        const workspace = createWorkspaceSandbox(policy);
+        const workspace = process.env.NEXAFORGE_APPLICATION_SANDBOX === 'container'
+          ? createContainerWorkspaceSandbox({ root: request.workspaceRoot, network: process.env.NEXAFORGE_SANDBOX_NETWORK === 'bridge' ? 'bridge' : 'none' })
+          : createWorkspaceSandbox(policy);
         const verifier = options.verifierFactory
           ? options.verifierFactory(request.workspaceRoot, blueprint)
           : createBuildVerifier({ workspace, packageManager: blueprint.packageManager, cwd: '.' });
