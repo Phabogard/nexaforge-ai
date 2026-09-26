@@ -11,6 +11,19 @@ export interface CommandPolicy {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  env?: Record<string, string>;
+}
+
+export interface WorkspaceProcessResult {
+  exitCode: number;
+  signal?: string;
+  stdout: string;
+  stderr: string;
+}
+
+export interface WorkspaceProcess {
+  readonly result: Promise<WorkspaceProcessResult>;
+  kill(signal?: NodeJS.Signals): void;
 }
 
 export interface WorkspaceExecutor {
@@ -22,6 +35,7 @@ export interface WorkspaceExecutor {
     stdout: string;
     stderr: string;
   }>;
+  startProcess?(command: CommandPolicy, signal?: AbortSignal): Promise<WorkspaceProcess>;
 }
 
 /**
