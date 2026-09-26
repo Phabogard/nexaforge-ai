@@ -88,3 +88,32 @@ export function parseDeploymentSource(value: unknown): ApplicationDeploymentSour
   validateApplicationDeploymentSource(source);
   return source;
 }
+
+export interface ApplicationArtifactManifest {
+  projectId: string;
+  buildId: string;
+  source: ApplicationDeploymentSource;
+  files: ApplicationArtifactFile[];
+  totalBytes: number;
+  contentHash: string;
+  createdAt: string;
+}
+
+export function createWorkspaceArtifactManifest(
+  projectId: string,
+  buildId: string,
+  source: Extract<ApplicationDeploymentSource, { type: 'workspace' }>,
+  files: ApplicationArtifactFile[],
+  createdAt = new Date().toISOString()
+): ApplicationArtifactManifest {
+  const totalBytes = files.reduce((total, file) => total + file.sizeBytes, 0);
+  if (files.length === 0) throw new Error('EMPTY_APPLICATION_ARTIFACT');
+  if (files.some(file => !file.path || file.path.startsWith('/') || file.path.split('/').includes('..'))) {
+    throw new Error('INVALID_APPLICATION_ARTIFACT');
+  }
+  const contentHash = files
+    .map(file => file.path + ':' + file.contentHash)
+    .sort()
+    .join('|');
+  return { projectId, buildId, source, files, totalBytes, contentHash, createdAt };
+}
