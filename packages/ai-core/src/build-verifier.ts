@@ -1,8 +1,9 @@
 import type { WorkspaceExecutor, WorkspaceProcess } from './workspace-tools';
+import { validateApplicationInBrowser } from './browser-validator';
 
 export interface VerificationResult {
   ok: boolean;
-  stage: 'install' | 'test' | 'build' | 'runtime';
+  stage: 'install' | 'test' | 'build' | 'runtime' | 'browser';
   exitCode?: number;
   stdout?: string;
   stderr?: string;
@@ -14,6 +15,7 @@ export interface BuildVerifier {
   test(signal?: AbortSignal): Promise<VerificationResult>;
   build(signal?: AbortSignal): Promise<VerificationResult>;
   validateRuntime(signal?: AbortSignal): Promise<VerificationResult>;
+  validateBrowser(signal?: AbortSignal): Promise<VerificationResult>;
 }
 
 export interface BuildVerifierOptions {
@@ -27,6 +29,8 @@ export interface BuildVerifierOptions {
   runtimePath?: string;
   runtimeStartupTimeoutMs?: number;
   runtimePollIntervalMs?: number;
+  browserNavigationTimeoutMs?: number;
+  browserExecutablePath?: string;
 }
 
 const commandFor = (manager: 'npm' | 'pnpm' | 'yarn' | 'bun', script: string) =>
@@ -129,6 +133,25 @@ export function createBuildVerifier(options: BuildVerifierOptions): BuildVerifie
       const c = commandFor(manager, 'build');
       return run('build', c.command, c.args, signal);
     },
+    async validateBrowser(signal) {
+      const c = commandFor(manager, 'start');
+      const result = await validateApplicationInBrowser({
+        workspace: options.workspace,
+        command: c,
+        cwd,
+        port: options.runtimePort ?? 3000,
+        path: options.runtimePath ?? '/',
+        startupTimeoutMs: options.runtimeStartupTimeoutMs ?? 10000,
+        navigationTimeoutMs: options.browserNavigationTimeoutMs ?? 10000,
+        executablePath: options.browserExecutablePath
+      }, signal);
+      return {
+        ok: result.ok,
+        stage: 'browser',
+        diagnostics: result.diagnostics,
+        stdout: result.title,
+      };
+    }
     async validateRuntime(signal) {
       const starter = options.workspace.startProcess;
       if (!starter) {
