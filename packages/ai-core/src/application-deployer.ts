@@ -1,9 +1,11 @@
+import type { ApplicationDeploymentSource } from './application-artifact';
+
 export type DeploymentStatus = 'queued' | 'deploying' | 'ready' | 'failed' | 'cancelled';
 
 export interface ApplicationDeploymentRequest {
   projectId: string;
   buildId: string;
-  workspaceRoot: string;
+  source: ApplicationDeploymentSource;
   environment: string;
   name: string;
   port?: number;
@@ -23,10 +25,6 @@ export interface ApplicationDeployer {
   cancel?(externalId: string, signal?: AbortSignal): Promise<void>;
 }
 
-/**
- * Development-only adapter. It deliberately does not claim that an application
- * is running: the workspace has not been published to an application host.
- */
 export function createLocalDeployer(): ApplicationDeployer {
   return {
     async deploy(request, signal) {
@@ -35,8 +33,8 @@ export function createLocalDeployer(): ApplicationDeployer {
         status: 'failed',
         provider: 'local',
         externalId: request.buildId,
-        message: 'LOCAL_DEPLOYMENT_UNSUPPORTED: no application server is attached to the local workspace.',
-        metadata: { workspaceRoot: request.workspaceRoot, environment: request.environment }
+        message: 'LOCAL_DEPLOYMENT_UNSUPPORTED',
+        metadata: { sourceType: request.source.type, environment: request.environment }
       };
     }
   };
