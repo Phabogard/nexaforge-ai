@@ -42,7 +42,7 @@ export interface ApplicationBuildStep {
   requiresApproval: boolean;
 }
 
-export interface ApplicationBuildCheckpoint { stepKey:string; phase:ApplicationBuildPhase; blueprint?:ProjectBlueprint; repairAttempts?:number; }
+export interface ApplicationBuildCheckpoint { stepKey:string; phase:ApplicationBuildPhase; status?:'running'|'completed'|'failed'; blueprint?:ProjectBlueprint; repairAttempts?:number; output?:unknown; errorCode?:string; }
 
 export interface ApplicationBuildRequest {
   projectId: string;
