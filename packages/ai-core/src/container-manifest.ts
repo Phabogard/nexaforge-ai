@@ -1,4 +1,5 @@
 import type { ProjectBlueprint } from './application-builder';
+import { validateProjectCommand } from './application-policy';
 
 export interface ContainerManifest {
   dockerfile: string;
@@ -19,6 +20,9 @@ export function createContainerManifest(blueprint: ProjectBlueprint, port = 3000
     blueprint.packageManager === 'bun' ? 'bun run start' :
     'pnpm start'
   );
+  validateProjectCommand(start);
+  validateProjectCommand(blueprint.commands.build);
+  validateProjectCommand(blueprint.commands.install);
 
   return {
     context: '.',
