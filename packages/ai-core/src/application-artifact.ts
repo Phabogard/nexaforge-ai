@@ -24,6 +24,23 @@ export interface ApplicationArtifactPublisher {
   publish(artifact: ApplicationArtifact, signal?: AbortSignal): Promise<ApplicationDeploymentSource>;
 }
 
+/**
+ * Development adapter: preserves the explicit source contract without claiming
+ * that a workspace has been uploaded to a remote transport.
+ */
+export function createLocalArtifactPublisher(): ApplicationArtifactPublisher {
+  return {
+    async publish(artifact, signal) {
+      validateApplicationDeploymentSource(artifact.source);
+      if (signal?.aborted) throw new Error('ARTIFACT_PUBLISH_CANCELLED');
+      if (artifact.source.type !== 'workspace') {
+        throw new Error('LOCAL_ARTIFACT_PUBLISHER_REQUIRES_WORKSPACE');
+      }
+      return artifact.source;
+    }
+  };
+}
+
 export interface ApplicationImageBuildRequest {
   projectId: string;
   buildId: string;
