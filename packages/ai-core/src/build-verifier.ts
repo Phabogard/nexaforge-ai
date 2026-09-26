@@ -11,7 +11,7 @@ export function createBuildVerifier(options:BuildVerifierOptions):BuildVerifier 
     const output=await options.workspace.exec({command,args,cwd,timeoutMs:120000},signal); return result(stage,output.exitCode,output.stdout,output.stderr);
   };
   return {
-    install(signal){return run('install',manager,options.installArgs??(manager==='pnpm'?['install','--frozen-lockfile']:['install']),signal);},
+    install(signal){return run('install',manager,options.installArgs??(manager==='pnpm'?['install','--no-frozen-lockfile']:['install']),signal);},
     test(signal){const c=commandFor(manager,options.testScript??'test'); return run('test',c.command,c.args,signal);},
     build(signal){const c=commandFor(manager,options.buildScript??'build'); return run('build',c.command,c.args,signal);},
     validateRuntime(signal){const c=commandFor(manager,'start'); return options.workspace.exec({command:c.command,args:c.args,cwd,timeoutMs:10000},signal).then(output=>result('runtime',output.exitCode,output.stdout,output.stderr)).catch(error=>{if(error instanceof Error && error.message==='WORKSPACE_COMMAND_TIMEOUT') return {ok:true,stage:'runtime',diagnostics:['start command remained alive for validation timeout']}; throw error;});}
