@@ -120,7 +120,7 @@ export function createRenderImageDeployer(options: RenderImageDeployerOptions = 
         if (status === 'live') {
           const url = typeof service.serviceDetails?.url === 'string' ? service.serviceDetails.url : typeof service.url === 'string' ? service.url : undefined;
           if (url) {
-            const health = await fetch(new URL(healthPath, url), {signal});
+            const health = await http(new URL(healthPath, url).toString(), {signal, headers:{Accept:'application/json'}});
             if (!health.ok) throw new Error(`RENDER_HEALTH_CHECK_FAILED:${health.status}`);
           }
           return {status:'ready',provider:'render',externalId:`${serviceId}:${deployId}`,url,metadata:{serviceId,deployId,image:imagePath,renderStatus:status}};
