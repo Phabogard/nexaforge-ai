@@ -60,12 +60,16 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
       let blueprint: ProjectBlueprint | undefined;
       const completedSteps: string[] = [];
       let repairAttempts = 0;
+      const checkpoints = request.resumeFrom ?? [];
+      const has = (step:string) => checkpoints.some(c => c.stepKey === step);
+      const checkpoint = async (stepKey:string, nextPhase:ApplicationBuildPhase) => { completedSteps.push(stepKey); await request.checkpoint?.({stepKey,phase:nextPhase,blueprint,repairAttempts}); };
       const checkAbort = () => { if (signal?.aborted) throw new Error('APPLICATION_BUILD_CANCELLED'); };
 
       try {
         checkAbort();
-        blueprint = await planner.createBlueprint(request);
-        completedSteps.push('plan');
+        if (has('plan')) blueprint = checkpoints.find(c => c.stepKey === 'plan')?.blueprint;
+        if (!blueprint) { blueprint = await planner.createBlueprint(request); await checkpoint('plan','planning'); }
+        else if (!completedSteps.includes('plan')) completedSteps.push('plan');
         phase = 'scaffolding';
 
         const policy = {
@@ -90,7 +94,8 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           JSON.stringify(blueprint)
         ].join('\n');
 
-        const generated = parseFiles(await options.model.generate({
+        if (has('code')) { phase = 'installing'; }
+        const generated = has('code') ? [] : parseFiles(await options.model.generate({
           system: generationPrompt,
           messages: [{ role: 'user', content: request.prompt }]
         }));
@@ -101,17 +106,18 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
         if (!generated.some(file => file.path === 'package.json')) {
           await workspace.writeFile('package.json', packageJson(blueprint), signal);
         }
-        completedSteps.push('scaffold', 'code');
+        if (!has('scaffold')) await checkpoint('scaffold','scaffolding');
+        if (!has('code')) await checkpoint('code','coding');
 
         phase = 'installing';
         checkAbort();
-        const installed = await verifier.install(signal);
+        const installed = has('install') ? {ok:true} : await verifier.install(signal);
         if (!installed.ok) throw new Error('INSTALL_FAILED');
-        completedSteps.push('install');
+        if (!has('install')) await checkpoint('install','installing');
 
         phase = 'testing';
-        let verification = await verifier.test(signal);
-        completedSteps.push('test');
+        let verification = has('test') ? {ok:true} : await verifier.test(signal);
+        if (!has('test')) await checkpoint('test','testing');
 
         while (!verification.ok && repairAttempts < request.maxRepairAttempts) {
           phase = 'repairing';
@@ -140,8 +146,8 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
         if (!build.ok) throw new Error('BUILD_FAILED');
         const runtime = await verifier.validateRuntime(signal);
         if (!runtime.ok && runtime.exitCode !== undefined) throw new Error('RUNTIME_VALIDATION_FAILED');
-        if (repairAttempts > 0) completedSteps.push('repair');
-        completedSteps.push('validate');
+        if (repairAttempts > 0 && !has('repair')) await checkpoint('repair','repairing');
+        if (!has('validate')) await checkpoint('validate','validating');
 
         return { projectId: request.projectId, phase: 'completed', blueprint, completedSteps, repairAttempts, summary: 'Application generated, tested and validated.' };
       } catch (error) {
