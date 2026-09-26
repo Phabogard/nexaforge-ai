@@ -84,9 +84,10 @@ export class ApplicationBuildWorker {
       } else {
         await this.store.addBuildEvent({buildId:build.id,eventType:result.phase==='cancelled'?'build.cancelled':'build.failed',phase:result.phase,payload:{errorCode:result.errorCode}});
       }
+      const persistedResult = result.phase === 'completed' && result.blueprint ? { ...result, deploymentSource } : result;
       const current=await this.store.getBuild(build.id);
       if(current?.status==='cancelled') return;
-      await this.store.updateBuild(build.id,{status:result.phase==='completed'?'completed':result.phase==='cancelled'?'cancelled':'failed',phase:result.phase,result,repairAttempts:result.repairAttempts,errorCode:result.errorCode});
+      await this.store.updateBuild(build.id,{status:result.phase==='completed'?'completed':result.phase==='cancelled'?'cancelled':'failed',phase:result.phase,result:persistedResult,repairAttempts:result.repairAttempts,errorCode:result.errorCode});
     }catch(error){
       const message=error instanceof Error?error.message:'APPLICATION_BUILD_FAILED';
       const current=await this.store.getBuild(build.id);
