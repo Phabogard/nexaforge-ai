@@ -61,6 +61,15 @@ export interface ApplicationImageBuilder {
   build(request: ApplicationImageBuildRequest, signal?: AbortSignal): Promise<ApplicationImage>;
 }
 
+export function createUnsupportedImageBuilder(): ApplicationImageBuilder {
+  return {
+    async build(_request, signal) {
+      if (signal?.aborted) throw new Error('IMAGE_BUILD_CANCELLED');
+      throw new Error('IMAGE_BUILD_UNSUPPORTED: no container builder is configured');
+    }
+  };
+}
+
 const SAFE_GIT_REVISION = /^[A-Za-z0-9._/-]{1,200}$/;
 const SAFE_REFERENCE = /^[A-Za-z0-9._:@/-]{1,500}$/;
 
