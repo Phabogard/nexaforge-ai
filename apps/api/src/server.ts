@@ -1,11 +1,13 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { createTaskRepository, createApplicationRepository, type TaskRepository, type TaskRecord, type TaskEventRecord } from '@nexaforge/db';
 import type { AgentMode } from '@nexaforge/shared';
 import { configuredWorker, type TaskWorker } from './task-worker';
 import { ApplicationBuildWorker } from './application-worker';
+import { createLocalDeployer } from '@nexaforge/ai-core';
 
 const app = Fastify({ logger: true });
 const memoryTasks = new Map<string, TaskRecord>();
@@ -85,6 +87,78 @@ app.post('/api/v1/applications/:id/builds', async (request, reply) => {
   if(!(await applicationRepository.getProject(id)))return reply.code(404).send({error:'APPLICATION_NOT_FOUND'});
   try{return reply.code(202).send(await applicationRepository.createBuild({projectId:id,request:parsed.data}));}
   catch(error){request.log.error(error);return reply.code(500).send({error:'APPLICATION_BUILD_CREATE_FAILED'});}
+});
+
+app.post('/api/v1/applications/:id/deployments', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const { id } = request.params as { id: string };
+  const project = await applicationRepository.getProject(id);
+  if (!project) return reply.code(404).send({ error: 'APPLICATION_NOT_FOUND' });
+
+  const body = z.object({
+    buildId: z.string().uuid(),
+    provider: z.enum(['local']).default('local'),
+    environment: z.string().min(1).max(64).default('production'),
+    port: z.number().int().min(1).max(65535).optional()
+  }).safeParse(request.body);
+  if (!body.success) return reply.code(400).send({ error: 'INVALID_REQUEST', details: body.error.flatten() });
+
+  const build = await applicationRepository.getBuild(body.data.buildId);
+  if (!build || build.projectId !== id) return reply.code(404).send({ error: 'APPLICATION_BUILD_NOT_FOUND' });
+  if (build.status !== 'completed' || build.phase !== 'completed') {
+    return reply.code(409).send({ error: 'BUILD_NOT_DEPLOYABLE', status: build.status, phase: build.phase });
+  }
+
+  const workspaceRoot = join(process.env.APPLICATION_WORKSPACE_ROOT ?? '/tmp/nexaforge-projects', project.id);
+  const deployment = await applicationRepository.createDeployment({
+    projectId: project.id,
+    buildId: build.id,
+    provider: body.data.provider,
+    environment: body.data.environment,
+    metadata: { requestedPort: body.data.port ?? null }
+  });
+  await applicationRepository.updateDeployment(deployment.id, { status: 'deploying' });
+  await applicationRepository.addBuildEvent({
+    buildId: build.id,
+    eventType: 'deployment.started',
+    phase: 'deploying',
+    payload: { deploymentId: deployment.id, provider: body.data.provider, environment: body.data.environment }
+  });
+
+  try {
+    const result = await createLocalDeployer().deploy({
+      projectId: project.id,
+      buildId: build.id,
+      workspaceRoot,
+      environment: body.data.environment,
+      name: project.name,
+      port: body.data.port
+    });
+    const updated = await applicationRepository.updateDeployment(deployment.id, {
+      status: result.status,
+      externalId: result.externalId,
+      url: result.url,
+      metadata: result.metadata
+    });
+    await applicationRepository.addBuildEvent({
+      buildId: build.id,
+      eventType: result.status === 'ready' ? 'deployment.ready' : 'deployment.failed',
+      phase: result.status === 'ready' ? 'completed' : 'failed',
+      payload: { deploymentId: deployment.id, provider: result.provider, message: result.message }
+    });
+    return reply.code(result.status === 'ready' ? 200 : 502).send(updated);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'DEPLOYMENT_FAILED';
+    const updated = await applicationRepository.updateDeployment(deployment.id, { status: 'failed', metadata: { error: message } });
+    await applicationRepository.addBuildEvent({
+      buildId: build.id,
+      eventType: 'deployment.failed',
+      phase: 'failed',
+      payload: { deploymentId: deployment.id, errorCode: message }
+    });
+    request.log.error(error);
+    return reply.code(502).send(updated);
+  }
 });
 
 app.get('/api/v1/applications/:id', async (request, reply) => {
