@@ -48,6 +48,7 @@ export interface ApplicationImageBuildRequest {
   workspaceRoot?: string;
   imageName: string;
   imageTag: string;
+  registry?: string;
   port?: number;
 }
 
