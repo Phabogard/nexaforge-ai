@@ -61,6 +61,44 @@ describe('Render image deployer', () => {
     expect(calls.at(-1)?.url).toBe('https://app.example.com/');
   });
 
+
+  it('reuses an existing deterministic service after worker recovery', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const http = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (url.includes('/services?')) {
+        return response([{ service: { id: 'srv-existing', name: 'app-project-deploy', imagePath: 'registry/app:build' } }]);
+      }
+      if (url.endsWith('/services/srv-existing/deploys')) {
+        return response({ id: 'dep-retry' }, 201);
+      }
+      if (url.endsWith('/services/srv-existing/deploys/dep-retry')) {
+        return response({ status: 'live' });
+      }
+      if (url === 'https://app.example.com/') return response({ ok: true });
+      throw new Error('unexpected request');
+    });
+
+    const result = await createRenderImageDeployer({
+      apiKey: 'rnd_test',
+      ownerId: 'own_test',
+      timeoutMs: 100,
+      http
+    }).deploy({
+      projectId: 'project',
+      buildId: 'build',
+      deploymentId: 'deploy-123',
+      source: { type: 'image', reference: 'registry/app:build' },
+      environment: 'production',
+      name: 'app'
+    });
+
+    expect(result.status).toBe('ready');
+    expect(result.externalId).toBe('srv-existing:dep-retry');
+    expect(calls.some(call => call.url.endsWith('/services'))).toBe(false);
+    expect(calls[1].url).toBe('https://api.render.com/v1/services/srv-existing/deploys');
+  });
+
   it('fails closed when Render reports a terminal deploy failure', async () => {
     const http = vi.fn(async (url: string) => {
       if (url.endsWith('/services')) return response({ service: { id: 'srv-1' }, deployId: 'dep-1' });
