@@ -73,3 +73,4 @@ export { createApplicationTools } from './application-tools';
 export { createApplicationPlanner } from './application-planner';
 export * from './application-policy';
 export * from './container-manifest';
+export * from './application-image-builder';
