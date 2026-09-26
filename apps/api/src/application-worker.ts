@@ -4,9 +4,11 @@ import { createHash } from 'node:crypto';
 import { createConfiguredModelProvider, createApplicationBuilder } from '@nexaforge/ai-core';
 import type { ApplicationRepository, ApplicationBuildRecord } from '@nexaforge/db';
 
+const SECRET_FILE = /(^|\/)(\.env(?:\..*)?|credentials?\.(json|ya?ml)|.*\.(pem|key|p12|pfx))$/i;
+
 async function collectArtifacts(root:string):Promise<Array<{path:string,kind:string,hash:string,size:number}>>{
   const out:Array<{path:string,kind:string,hash:string,size:number}>=[]; const ignored=new Set(['node_modules','.git','.next','dist','build']);
-  async function walk(dir:string){for(const entry of await readdir(dir,{withFileTypes:true})){if(ignored.has(entry.name))continue;const full=join(dir,entry.name);if(entry.isDirectory())await walk(full);else{const data=await readFile(full);const path=relative(root,full).split('\\').join('/');const ext=path.split('.').pop()?.toLowerCase();const kind=['json','yaml','yml','toml','env','config'].includes(ext??'')?'config':['png','jpg','jpeg','gif','svg','webp','ico'].includes(ext??'')?'asset':'source';out.push({path,kind,hash:createHash('sha256').update(data).digest('hex'),size:(await stat(full)).size});}}}
+  async function walk(dir:string){for(const entry of await readdir(dir,{withFileTypes:true})){if(ignored.has(entry.name))continue;const full=join(dir,entry.name);if(entry.isDirectory())await walk(full);else{const path=relative(root,full).split('\\').join('/');if(SECRET_FILE.test(path))continue;const data=await readFile(full);const ext=path.split('.').pop()?.toLowerCase();const kind=['json','yaml','yml','toml','config'].includes(ext??'')?'config':['png','jpg','jpeg','gif','svg','webp','ico'].includes(ext??'')?'asset':'source';out.push({path,kind,hash:createHash('sha256').update(data).digest('hex'),size:(await stat(full)).size});}}}
   await walk(root); return out;
 }
 
@@ -38,16 +40,25 @@ export class ApplicationBuildWorker {
       await this.store.upsertBuildStep({buildId:build.id,stepKey:'plan',phase:'planning',status:'running'});
       await this.store.addBuildEvent({buildId:build.id,eventType:'phase.started',phase:'planning'});
       const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3},controller.signal);
-      for(const step of result.completedSteps) await this.store.upsertBuildStep({buildId:build.id,stepKey:step,phase:step==='plan'?'planning':step==='scaffold'?'scaffolding':step==='code'?'coding':step==='install'?'installing':step==='test'?'testing':step==='repair'?'repairing':'validating',status:'completed'});
+      const phaseMap:Record<string,string>={plan:'planning',scaffold:'scaffolding',code:'coding',install:'installing',test:'testing',repair:'repairing',validate:'validating'};
+      for(const step of result.completedSteps) await this.store.upsertBuildStep({buildId:build.id,stepKey:step,phase:phaseMap[step]??result.phase,status:'completed'});
       if(result.phase==='completed' && result.blueprint){
         const version=await this.store.createProjectVersion({projectId:project.id,blueprint:result.blueprint});
-        for(const artifact of await collectArtifacts(workspaceRoot)) await this.store.addArtifact({projectVersionId:version.id,path:artifact.path,kind:artifact.kind,contentHash:artifact.hash,sizeBytes:artifact.size});
-        await this.store.addBuildEvent({buildId:build.id,eventType:'build.completed',phase:'completed',payload:{versionId:version.id,artifactCount:(await this.store.listArtifacts(version.id)).length}});
+        const artifacts=await collectArtifacts(workspaceRoot);
+        for(const artifact of artifacts) await this.store.addArtifact({projectVersionId:version.id,path:artifact.path,kind:artifact.kind,contentHash:artifact.hash,sizeBytes:artifact.size});
+        await this.store.addBuildEvent({buildId:build.id,eventType:'build.completed',phase:'completed',payload:{versionId:version.id,artifactCount:artifacts.length}});
       } else {
         await this.store.addBuildEvent({buildId:build.id,eventType:result.phase==='cancelled'?'build.cancelled':'build.failed',phase:result.phase,payload:{errorCode:result.errorCode}});
       }
+      const current=await this.store.getBuild(build.id);
+      if(current?.status==='cancelled') return;
       await this.store.updateBuild(build.id,{status:result.phase==='completed'?'completed':result.phase==='cancelled'?'cancelled':'failed',phase:result.phase,result,repairAttempts:result.repairAttempts,errorCode:result.errorCode});
-    }catch(error){const message=error instanceof Error?error.message:'APPLICATION_BUILD_FAILED';await this.store.addBuildEvent({buildId:build.id,eventType:controller.signal.aborted?'build.cancelled':'build.failed',phase:controller.signal.aborted?'cancelled':'failed',payload:{errorCode:message}});await this.store.updateBuild(build.id,{status:controller.signal.aborted?'cancelled':'failed',phase:controller.signal.aborted?'cancelled':'failed',errorCode:message});}
-    finally{this.controllers.delete(build.id);}
+    }catch(error){
+      const message=error instanceof Error?error.message:'APPLICATION_BUILD_FAILED';
+      const current=await this.store.getBuild(build.id);
+      if(current?.status==='cancelled') return;
+      await this.store.addBuildEvent({buildId:build.id,eventType:controller.signal.aborted?'build.cancelled':'build.failed',phase:controller.signal.aborted?'cancelled':'failed',payload:{errorCode:message}});
+      await this.store.updateBuild(build.id,{status:controller.signal.aborted?'cancelled':'failed',phase:controller.signal.aborted?'cancelled':'failed',errorCode:message});
+    }finally{this.controllers.delete(build.id);}
   }
 }
