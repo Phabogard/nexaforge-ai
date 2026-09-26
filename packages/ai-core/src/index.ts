@@ -31,7 +31,7 @@ function parsePlan(raw: string, task: AgentTask, tools: Tool[]): PlanStep[] {
   });
 }
 
-export function createSupervisor(tools: Tool[], model: ModelProvider, registry = createToolRegistry(tools)): AgentRuntime {
+export function createSupervisor(tools: Tool[], model: ModelProvider, registry = (() => { const value = new ToolRegistry(); for (const tool of tools) value.register(tool); return value; })()): AgentRuntime {
   return {
     async plan(task) {
       const toolList = tools.map(t => `${t.name} [${t.risk}]: ${t.description}`).join('\n');
@@ -68,6 +68,6 @@ export { createWorkspaceSandbox } from './workspace-sandbox';
 export { createApplicationBuilder } from './application-builder-runtime';
 export * from './build-verifier';
 export * from './application-deployer';
-export { applicationBuilderTools, createApplicationTools } from './application-tools';
+export { createApplicationTools } from './application-tools';
 export { createApplicationPlanner } from './application-planner';
 export * from './application-policy';
