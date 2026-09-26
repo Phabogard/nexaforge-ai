@@ -103,7 +103,9 @@ export function createRenderImageDeployer(options: RenderImageDeployerOptions = 
       let deployId = '';
 
       if (!service) {
-        const created = await request('/services', {
+        let created: any;
+        try {
+          created = await request('/services', {
           method:'POST',
           body: JSON.stringify({
             type:'web_service',
@@ -113,9 +115,21 @@ export function createRenderImageDeployer(options: RenderImageDeployerOptions = 
             image:{imagePath},
             serviceDetails:{buildPlan:plan,region,healthCheckPath:healthPath}
           })
-        });
-        service = created.service ?? created;
-        deployId = String(created.deployId ?? '');
+          });
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.startsWith('RENDER_API_409:')) throw error;
+          service = await findExistingService(serviceName);
+          if (!service) throw error;
+          const triggered = await request(`/services/${encodeURIComponent(String(service.id))}/deploys`, {
+            method:'POST',
+            body: JSON.stringify({ imageUrl: imagePath })
+          });
+          deployId = String(triggered.id ?? '');
+        }
+        if (created) {
+          service = created.service ?? created;
+          deployId = String(created.deployId ?? '');
+        }
       } else {
         const existingImage = typeof service.imagePath === 'string' ? service.imagePath.split('@')[0] : '';
         const requestedImage = imagePath.split('@')[0];
