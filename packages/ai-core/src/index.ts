@@ -78,3 +78,5 @@ export * from './application-image-builder';
 export * from './application-registry-publisher';
 
 export * from './browser-validator';
+
+export { createContainerWorkspaceSandbox } from './container-workspace-sandbox';
