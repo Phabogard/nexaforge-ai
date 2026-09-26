@@ -23,16 +23,19 @@ export interface ApplicationDeployer {
   cancel?(externalId: string, signal?: AbortSignal): Promise<void>;
 }
 
+/**
+ * Development-only adapter. It deliberately does not claim that an application
+ * is running: the workspace has not been published to an application host.
+ */
 export function createLocalDeployer(): ApplicationDeployer {
   return {
     async deploy(request, signal) {
       if (signal?.aborted) return { status: 'cancelled', provider: 'local' };
       return {
-        status: 'ready',
+        status: 'failed',
         provider: 'local',
         externalId: request.buildId,
-        url: undefined,
-        message: 'Local deployment adapter validated the build workspace.',
+        message: 'LOCAL_DEPLOYMENT_UNSUPPORTED: no application server is attached to the local workspace.',
         metadata: { workspaceRoot: request.workspaceRoot, environment: request.environment }
       };
     }
