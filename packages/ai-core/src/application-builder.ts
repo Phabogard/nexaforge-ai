@@ -42,12 +42,16 @@ export interface ApplicationBuildStep {
   requiresApproval: boolean;
 }
 
+export interface ApplicationBuildCheckpoint { stepKey:string; phase:ApplicationBuildPhase; blueprint?:ProjectBlueprint; repairAttempts?:number; }
+
 export interface ApplicationBuildRequest {
   projectId: string;
   prompt: string;
   workspaceRoot: string;
   maxIterations: number;
   maxRepairAttempts: number;
+  resumeFrom?: ApplicationBuildCheckpoint[];
+  checkpoint?: (checkpoint: ApplicationBuildCheckpoint) => Promise<void>;
 }
 
 export interface ApplicationBuildResult {
