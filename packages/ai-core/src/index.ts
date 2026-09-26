@@ -70,3 +70,4 @@ export * from './build-verifier';
 export * from './application-deployer';
 export { applicationBuilderTools, createApplicationTools } from './application-tools';
 export { createApplicationPlanner } from './application-planner';
+export * from './application-policy';
