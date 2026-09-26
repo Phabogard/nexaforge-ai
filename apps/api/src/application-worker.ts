@@ -61,6 +61,8 @@ export class ApplicationBuildWorker {
         }));
         const manifest = createWorkspaceArtifactManifest(project.id, build.id, source, artifactFiles);
         let deploymentSource: ApplicationDeploymentSource = source;
+        const deploymentArtifactManifest = manifest as unknown as Record<string, unknown>;
+        let image: ApplicationDeploymentSource = source;
         let image: { reference:string; digest?:string; registry?:string } | undefined;
 
         if (process.env.APPLICATION_IMAGE_BUILD === 'true') {
@@ -76,7 +78,7 @@ export class ApplicationBuildWorker {
         if (image && process.env.APPLICATION_IMAGE_PUSH === 'true') {
           deploymentSource = await createDockerRegistryArtifactPublisher({workspaceRoot}).publish({
             projectId:project.id, buildId:build.id, source:deploymentSource, files:manifest.files,
-            manifest, contentHash:manifest.contentHash, createdAt:manifest.createdAt
+            manifest: deploymentArtifactManifest, contentHash:manifest.contentHash, createdAt:manifest.createdAt
           }, controller.signal);
           await this.store.addBuildEvent({buildId:build.id,eventType:'artifact.image.published',phase:'deploying',payload:deploymentSource});
         }
