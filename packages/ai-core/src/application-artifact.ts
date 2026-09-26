@@ -1,0 +1,1 @@
+export type ApplicationDeploymentSource = { type: 'workspace'; workspaceRoot: string } | { type: 'git'; repository: string; revision: string; subdirectory?: string } | { type: 'image'; reference: string; digest?: string; registry?: string };
