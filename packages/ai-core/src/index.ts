@@ -65,3 +65,6 @@ export { DefaultToolPolicy, ToolRegistry } from './tool-registry';
 export { echoTool, timeTool } from './tools';
 export { webSearchTool } from './web-search';
 export { OpenAICompatibleProvider, UnconfiguredModelProvider, createConfiguredModelProvider } from './model-provider';
+export * from './application-builder';
+export * from './workspace-tools';
+export * from './build-verifier';
