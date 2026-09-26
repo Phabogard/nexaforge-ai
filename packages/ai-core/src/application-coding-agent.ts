@@ -1,0 +1,80 @@
+import type { ModelProvider, Tool } from './index';
+import type { AgentTask } from '@nexaforge/shared';
+
+export interface CodingAgentRequest {
+  prompt: string;
+  blueprint: unknown;
+  workspaceRoot: string;
+  maxIterations: number;
+  taskId: string;
+  signal?: AbortSignal;
+}
+
+export interface CodingAgentResult {
+  iterations: number;
+  completed: boolean;
+  calls: Array<{tool:string;input:unknown;output?:unknown;status:string}>;
+}
+
+function parseAction(raw: string): { tool?: string; input?: unknown; done?: boolean; reason?: string } {
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { throw new Error('INVALID_CODING_AGENT_JSON'); }
+  if (!value || typeof value !== 'object') throw new Error('INVALID_CODING_AGENT_ACTION');
+  const item = value as Record<string, unknown>;
+  if (item.tool !== undefined && typeof item.tool !== 'string') throw new Error('INVALID_CODING_AGENT_TOOL');
+  if (item.done !== undefined && typeof item.done !== 'boolean') throw new Error('INVALID_CODING_AGENT_DONE');
+  return { tool: item.tool, input: item.input, done: item.done, reason: typeof item.reason === 'string' ? item.reason : undefined };
+}
+
+export function createApplicationCodingAgent(options: { model: ModelProvider; tools: Tool[] }) {
+  const allowed = new Map(options.tools.map(tool => [tool.name, tool]));
+  return {
+    async run(request: CodingAgentRequest): Promise<CodingAgentResult> {
+      const calls: CodingAgentResult['calls'] = [];
+      const history: Array<{role:string;content:string}> = [{ role:'user', content: request.prompt }];
+      const toolList = options.tools.map(t => `${t.name}: ${t.description}`).join('\\n');
+
+      for (let iteration = 1; iteration <= Math.max(1, request.maxIterations); iteration++) {
+        if (request.signal?.aborted) throw new Error('APPLICATION_BUILD_CANCELLED');
+        const raw = await options.model.generate({
+          system: [
+            'You are the NexaForge autonomous coding agent.',
+            'Work directly inside the provided project workspace.',
+            'Inspect before modifying. Use small, verifiable changes.',
+            'Use filesystem.read to inspect files, filesystem.write to create or replace files, shell.exec for allowlisted commands, test.run and build.run for verification.',
+            'Never invent file contents or command results. Treat tool output as evidence.',
+            'When the application is complete and verified, return done=true.',
+            'Return ONLY JSON: {"tool":"exact.tool.name","input":{...},"done":false,"reason":"..."}',
+            'If no tool action is needed, return {"done":true,"reason":"..."}',
+            `Available tools:\\n${toolList}`,
+            `Blueprint:\\n${JSON.stringify(request.blueprint)}`,
+            `Workspace root: ${request.workspaceRoot}`,
+            `Iteration: ${iteration}/${Math.max(1, request.maxIterations)}`
+          ].join('\\n'),
+          messages: history.slice(-12)
+        });
+        const action = parseAction(raw);
+        if (action.done || !action.tool) return { iterations: iteration, completed: true, calls };
+
+        const tool = allowed.get(action.tool);
+        if (!tool) throw new Error(`UNKNOWN_CODING_AGENT_TOOL:${action.tool}`);
+        const task: AgentTask = {
+          id: request.taskId, workspaceId: 'application-builder', prompt: request.prompt,
+          mode: 'code', status: 'running', maxIterations: request.maxIterations
+        };
+        let output: unknown;
+        let status = 'completed';
+        try {
+          output = await tool.execute(action.input ?? {}, { task, signal: request.signal });
+        } catch (error) {
+          status = 'failed';
+          output = { error: error instanceof Error ? error.message : 'TOOL_EXECUTION_FAILED' };
+        }
+        calls.push({ tool: action.tool, input: action.input ?? {}, output, status });
+        history.push({ role:'assistant', content: raw });
+        history.push({ role:'user', content: `Tool result for ${action.tool}: ${JSON.stringify(output).slice(0, 50000)}` });
+      }
+      return { iterations: Math.max(1, request.maxIterations), completed: false, calls };
+    }
+  };
+}
