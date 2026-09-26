@@ -12,7 +12,7 @@ export function createContainerManifest(blueprint: ProjectBlueprint, port = 3000
   const install = blueprint.packageManager === 'npm' ? 'npm ci' :
     blueprint.packageManager === 'yarn' ? 'yarn install --frozen-lockfile' :
     blueprint.packageManager === 'bun' ? 'bun install --frozen-lockfile' :
-    'pnpm install --frozen-lockfile';
+    'pnpm install --no-frozen-lockfile';
 
   const start = blueprint.commands.start?.trim() || (
     blueprint.packageManager === 'npm' ? 'npm run start' :
