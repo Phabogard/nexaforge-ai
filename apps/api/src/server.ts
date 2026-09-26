@@ -103,6 +103,49 @@ app.get('/api/v1/application-builds/:id', async (request, reply) => {
   return build;
 });
 
+
+app.get('/api/v1/application-builds/:id/events', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const { id } = request.params as { id: string };
+  if (!(await applicationRepository.getBuild(id))) return reply.code(404).send({ error: 'APPLICATION_BUILD_NOT_FOUND' });
+  return { events: await applicationRepository.listBuildEvents(id) };
+});
+
+app.post('/api/v1/application-builds/:id/cancel', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const { id } = request.params as { id: string };
+  const build = await applicationRepository.getBuild(id);
+  if (!build) return reply.code(404).send({ error: 'APPLICATION_BUILD_NOT_FOUND' });
+  const updated = await applicationRepository.updateBuild(id, { status: 'cancelled', phase: 'cancelled', errorCode: 'CANCELLED_BY_USER' });
+  applicationWorker?.cancel(id);
+  await applicationRepository.addBuildEvent({ buildId: id, eventType: 'build.cancelled', phase: 'cancelled', payload: { reason: 'user_request' } });
+  return updated;
+});
+
+app.post('/api/v1/application-builds/:id/approve', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const { id } = request.params as { id: string };
+  const build = await applicationRepository.getBuild(id);
+  if (!build) return reply.code(404).send({ error: 'APPLICATION_BUILD_NOT_FOUND' });
+  const approval = await applicationRepository.decideApproval(id, 'execution', 'approved');
+  if (!approval) return reply.code(409).send({ error: 'APPROVAL_NOT_FOUND' });
+  const updated = await applicationRepository.updateBuild(id, { status: 'queued', phase: 'queued' });
+  await applicationRepository.addBuildEvent({ buildId: id, eventType: 'approval.granted', phase: 'queued', payload: { stepKey: 'execution' } });
+  return { build: updated, approval };
+});
+
+app.post('/api/v1/application-builds/:id/reject', async (request, reply) => {
+  if (!applicationRepository) return reply.code(503).send({ error: 'DATABASE_NOT_CONFIGURED' });
+  const { id } = request.params as { id: string };
+  const build = await applicationRepository.getBuild(id);
+  if (!build) return reply.code(404).send({ error: 'APPLICATION_BUILD_NOT_FOUND' });
+  const approval = await applicationRepository.decideApproval(id, 'execution', 'rejected');
+  if (!approval) return reply.code(409).send({ error: 'APPROVAL_NOT_FOUND' });
+  const updated = await applicationRepository.updateBuild(id, { status: 'failed', phase: 'failed', errorCode: 'APPROVAL_REJECTED' });
+  await applicationRepository.addBuildEvent({ buildId: id, eventType: 'approval.rejected', phase: 'failed', payload: { stepKey: 'execution' } });
+  return { build: updated, approval };
+});
+
 app.post('/api/v1/tasks', async (request, reply) => {
   const parsed = taskSchema.safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_REQUEST', details: parsed.error.flatten() });
