@@ -64,7 +64,7 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
       let repairAttempts = 0;
       const checkpoints = request.resumeFrom ?? [];
       const has = (step:string) => checkpoints.some(c => c.stepKey === step);
-      const checkpoint = async (stepKey:string, nextPhase:ApplicationBuildPhase) => { completedSteps.push(stepKey); await request.checkpoint?.({stepKey,phase:nextPhase,blueprint,repairAttempts}); };
+      const checkpoint = async (stepKey:string, nextPhase:ApplicationBuildPhase, status:'running'|'completed'|'failed'='completed', output?:unknown, errorCode?:string) => { if(status==='completed' && !completedSteps.includes(stepKey)) completedSteps.push(stepKey); await request.checkpoint?.({stepKey,phase:nextPhase,status,blueprint,repairAttempts,output,errorCode}); };
       const checkAbort = () => { if (signal?.aborted) throw new Error('APPLICATION_BUILD_CANCELLED'); };
 
       try {
@@ -120,20 +120,34 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           phase = 'repairing';
           repairAttempts++;
           checkAbort();
-          const repairPrompt = [
-            'Repair the generated application.',
-            'Return ONLY JSON array of file patches with full file contents.',
-            'Only patch files needed to fix the diagnostics.',
-            'Never use absolute paths, secrets, or destructive shell commands.',
-            'Diagnostics:', JSON.stringify(verification)
-          ].join('\n');
-          const patches = parseFiles(await options.model.generate({
-            system: repairPrompt,
-            messages: [{ role: 'user', content: request.prompt }]
-          }));
-          for (const patch of patches) await workspace.writeFile(patch.path, patch.content, signal);
+          await checkpoint('repair', 'repairing', 'running', { diagnostics: verification });
+          const repairTools = createApplicationTools({ workspace, verifier, packageManager: blueprint.packageManager, cwd: '.' });
+          const repairAgent = createApplicationCodingAgent({ model: options.model, tools: repairTools.tools });
+          const repair = await repairAgent.run({
+            prompt: [
+              'Repair the application using the real verification diagnostics below.',
+              'First inspect the relevant files. Make the smallest correct changes.',
+              'Run tests or build after changes and continue until the diagnostics are resolved.',
+              'Do not merely describe a patch: modify the workspace.',
+              'Diagnostics:', JSON.stringify(verification)
+            ].join('\\n'),
+            blueprint,
+            workspaceRoot: request.workspaceRoot,
+            maxIterations: Math.max(2, Math.ceil(request.maxIterations / 2)),
+            taskId: request.projectId,
+            signal
+          });
+          if (!repair.completed) {
+            await checkpoint('repair', 'repairing', 'failed', { diagnostics: verification, calls: repair.calls }, 'REPAIR_AGENT_MAX_ITERATIONS');
+            throw new Error('REPAIR_AGENT_MAX_ITERATIONS');
+          }
           phase = 'testing';
           verification = await verifier.test(signal);
+          if (!verification.ok && repairAttempts >= request.maxRepairAttempts) {
+            await checkpoint('repair', 'repairing', 'failed', { diagnostics: verification, calls: repair.calls }, 'TESTS_FAILED');
+          } else {
+            await checkpoint('repair', 'repairing', 'completed', { diagnostics: verification, calls: repair.calls });
+          }
         }
 
         if (!verification.ok) throw new Error('TESTS_FAILED');
