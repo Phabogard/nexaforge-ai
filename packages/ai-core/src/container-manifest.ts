@@ -9,7 +9,7 @@ export interface ContainerManifest {
 }
 
 export function createContainerManifest(blueprint: ProjectBlueprint, port = 3000): ContainerManifest {
-  const install = blueprint.packageManager === 'npm' ? 'npm ci' :
+  const install = blueprint.packageManager === 'npm' ? 'npm install' :
     blueprint.packageManager === 'yarn' ? 'yarn install --frozen-lockfile' :
     blueprint.packageManager === 'bun' ? 'bun install --frozen-lockfile' :
     'pnpm install --no-frozen-lockfile';
