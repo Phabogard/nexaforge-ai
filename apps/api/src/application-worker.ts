@@ -1,7 +1,7 @@
 import { mkdir, readdir, stat, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
-import { createConfiguredModelProvider, createApplicationBuilder, createContainerManifest } from '@nexaforge/ai-core';
+import { createConfiguredModelProvider, createApplicationBuilder, createContainerManifest, createWorkspaceArtifactManifest, createDockerImageBuilder, createDockerRegistryArtifactPublisher } from '@nexaforge/ai-core';
 import type { ApplicationRepository, ApplicationBuildRecord } from '@nexaforge/db';
 
 const SECRET_FILE = /(^|\/)(\.env(?:\..*)?|credentials?\.(json|ya?ml)|.*\.(pem|key|p12|pfx))$/i;
@@ -50,7 +50,36 @@ export class ApplicationBuildWorker {
         const version=await this.store.createProjectVersion({projectId:project.id,blueprint:result.blueprint});
         const artifacts=await collectArtifacts(workspaceRoot);
         for(const artifact of artifacts) await this.store.addArtifact({projectVersionId:version.id,path:artifact.path,kind:artifact.kind,contentHash:artifact.hash,sizeBytes:artifact.size});
-        await this.store.addBuildEvent({buildId:build.id,eventType:'build.completed',phase:'completed',payload:{versionId:version.id,artifactCount:artifacts.length}});
+
+        const source = { type: 'workspace' as const, workspaceRoot };
+        const artifactFiles = artifacts.map(artifact => ({
+          path: artifact.path,
+          kind: (artifact.kind === 'config' || artifact.kind === 'asset' ? artifact.kind : 'source') as 'source' | 'config' | 'asset' | 'manifest',
+          contentHash: artifact.hash,
+          sizeBytes: artifact.size
+        }));
+        const manifest = createWorkspaceArtifactManifest(project.id, build.id, source, artifactFiles);
+        let deploymentSource = source;
+        let image: { reference:string; digest?:string; registry?:string } | undefined;
+
+        if (process.env.APPLICATION_IMAGE_BUILD === 'true') {
+          const registry = process.env.APPLICATION_IMAGE_REGISTRY?.replace(/\/$/, '');
+          image = await createDockerImageBuilder().build({
+            projectId: project.id, buildId: build.id, source, workspaceRoot,
+            imageName: `nexaforge/${project.id}`, imageTag: build.id, registry, port: container.port
+          });
+          deploymentSource = { type: 'image', reference: image.reference, digest: image.digest, registry: image.registry };
+          await this.store.addBuildEvent({buildId:build.id,eventType:'artifact.image.built',phase:'validating',payload:image});
+        }
+
+        if (image && process.env.APPLICATION_IMAGE_PUSH === 'true') {
+          deploymentSource = await createDockerRegistryArtifactPublisher({workspaceRoot}).publish({
+            projectId:project.id, buildId:build.id, source:deploymentSource, files:manifest.files,
+            manifest, contentHash:manifest.contentHash, createdAt:manifest.createdAt
+          }, controller.signal);
+          await this.store.addBuildEvent({buildId:build.id,eventType:'artifact.image.published',phase:'deploying',payload:deploymentSource});
+        }
+        await this.store.addBuildEvent({buildId:build.id,eventType:'build.completed',phase:'completed',payload:{versionId:version.id,artifactCount:artifacts.length,artifact:{...manifest,source:deploymentSource},image}});
       } else {
         await this.store.addBuildEvent({buildId:build.id,eventType:result.phase==='cancelled'?'build.cancelled':'build.failed',phase:result.phase,payload:{errorCode:result.errorCode}});
       }
