@@ -156,7 +156,7 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
         const build = await verifier.build(signal);
         if (!build.ok) throw new Error('BUILD_FAILED');
         const runtime = await verifier.validateRuntime(signal);
-        if (!runtime.ok && runtime.exitCode !== undefined) throw new Error('RUNTIME_VALIDATION_FAILED');
+        if (!runtime.ok) throw new Error('RUNTIME_VALIDATION_FAILED');
         if (repairAttempts > 0 && !has('repair')) await checkpoint('repair','repairing');
         if (!has('validate')) await checkpoint('validate','validating');
 
