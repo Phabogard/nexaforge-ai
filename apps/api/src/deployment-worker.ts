@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import type { ApplicationRepository } from '@nexaforge/db';
-import { createLocalDeployer, parseDeploymentSource } from '@nexaforge/ai-core';
+import { createLocalDeployer, createRenderImageDeployer, parseDeploymentSource } from '@nexaforge/ai-core';
 
 export class ApplicationDeploymentWorker {
   private timer: NodeJS.Timeout | undefined;
@@ -67,7 +67,7 @@ export class ApplicationDeploymentWorker {
     }
 
     try {
-      const provider = deployment.provider === 'local' ? createLocalDeployer() : null;
+      const provider = deployment.provider === 'local' ? createLocalDeployer() : deployment.provider === 'render' ? createRenderImageDeployer() : null;
       if (!provider) throw new Error('UNSUPPORTED_DEPLOYMENT_PROVIDER');
 
       const result = await provider.deploy({
