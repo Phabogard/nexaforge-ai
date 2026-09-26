@@ -97,7 +97,7 @@ app.post('/api/v1/applications/:id/deployments', async (request, reply) => {
 
   const body = z.object({
     buildId: z.string().uuid(),
-    provider: z.enum(['local']).default('local'),
+    provider: z.enum(['local','render']).default('local'),
     environment: z.string().min(1).max(64).default('production'),
     port: z.number().int().min(1).max(65535).optional(),
     source: z.discriminatedUnion('type', [
