@@ -123,7 +123,7 @@ export function createRenderImageDeployer(options: RenderImageDeployerOptions = 
             const health = await fetch(new URL(healthPath, url), {signal});
             if (!health.ok) throw new Error(`RENDER_HEALTH_CHECK_FAILED:${health.status}`);
           }
-          return {status:'ready',provider:'render',externalId:serviceId,url,metadata:{serviceId,deployId,image:imagePath,renderStatus:status}};
+          return {status:'ready',provider:'render',externalId:`${serviceId}:${deployId}`,url,metadata:{serviceId,deployId,image:imagePath,renderStatus:status}};
         }
         if (TERMINAL_RENDER_FAILURES.has(status)) return {status:'failed',provider:'render',externalId:serviceId,message:`RENDER_DEPLOY_${status.toUpperCase()}`,metadata:{serviceId,deployId,renderStatus:status}};
         await sleep(5000, signal);
