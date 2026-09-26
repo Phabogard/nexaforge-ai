@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { ApplicationRepository } from '@nexaforge/db';
 import { createLocalDeployer, createRenderImageDeployer, parseDeploymentSource } from '@nexaforge/ai-core';
 
@@ -7,6 +8,9 @@ export class ApplicationDeploymentWorker {
   private running = false;
   private stopped = false;
   private readonly cancelled = new Set<string>();
+  private readonly controllers = new Map<string, AbortController>();
+  private readonly workerId = `deployment-worker-${process.pid}-${randomUUID()}`;
+  private readonly leaseSeconds = 60;
 
   constructor(private readonly repository: ApplicationRepository, private readonly pollMs = 1000) {
     this.schedule();
@@ -14,6 +18,7 @@ export class ApplicationDeploymentWorker {
 
   cancel(deploymentId: string) {
     this.cancelled.add(deploymentId);
+    this.controllers.get(deploymentId)?.abort();
   }
 
   stop() {
@@ -31,7 +36,7 @@ export class ApplicationDeploymentWorker {
     if (this.running) return this.schedule();
     this.running = true;
     try {
-      const deployment = await this.repository.claimNextDeployment();
+      const deployment = await this.repository.claimNextDeployment(this.workerId, this.leaseSeconds);
       if (deployment) await this.process(deployment);
     } catch {
       // Keep the worker alive.
@@ -42,6 +47,9 @@ export class ApplicationDeploymentWorker {
   }
 
   private async process(deployment: Awaited<ReturnType<ApplicationRepository['claimNextDeployment']>> extends infer T ? Exclude<T, null> : never) {
+    const controller = new AbortController();
+    this.controllers.set(deployment.id, controller);
+    const heartbeat = setInterval(() => { void this.repository.renewDeploymentLease(deployment.id, this.workerId, this.leaseSeconds).catch(() => {}); }, 20000);
     const buildId = deployment.buildId;
     const project = await this.repository.getProject(deployment.projectId);
     if (!project) {
@@ -77,7 +85,7 @@ export class ApplicationDeploymentWorker {
         environment: deployment.environment,
         name: project.name,
         port: typeof metadata.requestedPort === 'number' ? metadata.requestedPort : undefined
-      });
+      }, controller.signal);
 
       const latest = await this.repository.getDeployment(deployment.id);
       if (!latest || latest.status === 'cancelled') return;
@@ -101,6 +109,8 @@ export class ApplicationDeploymentWorker {
       const message = error instanceof Error ? error.message : 'DEPLOYMENT_FAILED';
       await this.repository.updateDeployment(deployment.id, { status: 'failed', metadata: { ...metadata, error: message } });
     } finally {
+      clearInterval(heartbeat);
+      this.controllers.delete(deployment.id);
       this.cancelled.delete(deployment.id);
     }
   }
