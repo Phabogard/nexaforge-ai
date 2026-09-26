@@ -57,7 +57,10 @@ export async function validateApplicationInBrowser(
         browser = await chromium.launch({
           headless: true,
           executablePath: options.executablePath || undefined,
-          args: ['--no-sandbox', '--disable-dev-shm-usage']
+          args: [
+            '--disable-dev-shm-usage',
+            ...(process.env.NEXAFORGE_BROWSER_NO_SANDBOX === 'true' ? ['--no-sandbox'] : [])
+          ]
         });
         const page = await browser.newPage();
         page.setDefaultNavigationTimeout(options.navigationTimeoutMs ?? 10000);
