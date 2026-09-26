@@ -45,6 +45,7 @@ export class ApplicationBuildWorker {
       const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3,resumeFrom,checkpoint:async checkpoint=>{const previous=persistedSteps.find(step=>step.stepKey===checkpoint.stepKey);const attempt=(previous?.attempt??0)+(checkpoint.status==='running'?1:0);await this.store.upsertBuildStep({buildId:build.id,stepKey:checkpoint.stepKey,phase:checkpoint.phase,status:checkpoint.status??'completed',attempt,output:checkpoint.output??{blueprint:checkpoint.blueprint,repairAttempts:checkpoint.repairAttempts},errorCode:checkpoint.errorCode});if(checkpoint.status!=='failed') await this.store.updateBuild(build.id,{status:'building',phase:checkpoint.phase,repairAttempts:checkpoint.repairAttempts});}},controller.signal);
       const phaseMap:Record<string,string>={plan:'planning',scaffold:'scaffolding',code:'coding',install:'installing',test:'testing',repair:'repairing',validate:'validating'};
       for(const step of result.completedSteps) await this.store.upsertBuildStep({buildId:build.id,stepKey:step,phase:phaseMap[step]??result.phase,status:'completed'});
+      let deploymentSource: ApplicationDeploymentSource | undefined;
       if(result.phase==='completed' && result.blueprint){
         const container = createContainerManifest(result.blueprint);
         const { writeFile } = await import('node:fs/promises');
@@ -62,7 +63,7 @@ export class ApplicationBuildWorker {
           sizeBytes: artifact.size
         }));
         const manifest = createWorkspaceArtifactManifest(project.id, build.id, source, artifactFiles);
-        let deploymentSource: ApplicationDeploymentSource = source;
+        deploymentSource = source;
         const deploymentArtifactManifest = manifest as unknown as Record<string, unknown>;
         let image: { reference:string; digest?:string; registry?:string } | undefined;
 
