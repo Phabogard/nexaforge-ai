@@ -83,7 +83,7 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
     const child = execFile("docker", cmd.args, { cwd: root, env: { PATH: process.env.PATH ?? "" } });
 
     return new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolvePromise, rejectPromise) => {
-      let stdout = "", stderr = "", settled = false, closed = false, abortRequested = false;
+      let stdout = "", stderr = "", settled = false, closed = false;
       let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 
       const cleanup = () => {
@@ -113,8 +113,12 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
       child.stderr?.on("data", d => { stderr = (stderr + String(d)).slice(0, MAX_OUTPUT); });
 
       const onAbort = () => {
-        abortRequested = true;
         terminateProcess("SIGTERM");
+        if (!settled) {
+          settled = true;
+          cleanup();
+          rejectPromise(new Error("WORKSPACE_OPERATION_ABORTED"));
+        }
       };
 
       if (signal) {
@@ -135,14 +139,6 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
 
       child.on("close", code => {
         closed = true;
-        if (abortRequested) {
-          if (!settled) {
-            settled = true;
-            cleanup();
-            rejectPromise(new Error("WORKSPACE_OPERATION_ABORTED"));
-          }
-          return;
-        }
         if (!settled) {
           settled = true;
           cleanup();
@@ -158,12 +154,11 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
     const { spawn } = await import("node:child_process");
     const cmd = dockerCommand(options, command, phase);
     const child = spawn("docker", cmd.args, { cwd: root, env: { PATH: process.env.PATH ?? "" }, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "", settled = false, closed = false, abortRequested = false;
+    let stdout = "", stderr = "", settled = false, closed = false;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 
     let resolveResult!: (value: { exitCode: number; signal?: string; stdout: string; stderr: string }) => void;
-    let rejectResult!: (error: Error) => void;
-    const result = new Promise<{ exitCode: number; signal?: string; stdout: string; stderr: string }>((resolveP, rejectP) => { resolveResult = resolveP; rejectResult = rejectP; });
+    const result = new Promise<{ exitCode: number; signal?: string; stdout: string; stderr: string }>((resolveP) => { resolveResult = resolveP; });
 
     const cleanup = () => {
       if (signal) signal.removeEventListener("abort", onAbort);
@@ -195,8 +190,8 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
     child.stderr?.on("data", d => { stderr = (stderr + String(d)).slice(0, MAX_OUTPUT); });
 
     const onAbort = () => {
-      abortRequested = true;
       terminateProcess("SIGTERM");
+      finish({ exitCode: 143, signal: "SIGTERM", stdout, stderr });
     };
 
     if (signal) {
@@ -210,14 +205,6 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
 
     child.on("close", (code, sig) => {
       closed = true;
-      if (abortRequested) {
-        if (!settled) {
-          settled = true;
-          cleanup();
-          rejectResult(new Error("WORKSPACE_OPERATION_ABORTED"));
-        }
-        return;
-      }
       finish({ exitCode: code ?? 1, signal: sig ?? undefined, stdout, stderr });
     });
 

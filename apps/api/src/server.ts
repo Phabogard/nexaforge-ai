@@ -388,8 +388,8 @@ app.get('/api/v1/tasks/:id/stream', async (request, reply) => {
       for (const event of events) {
         if (lastEventId && event.id === lastEventId) continue;
         if (lastEventId) {
-          const previousIndex = events.findIndex(item => item.id === lastEventId);
-          const currentIndex = events.findIndex(item => item.id === event.id);
+          const previousIndex = events.findIndex((item:any) => item.id === lastEventId);
+          const currentIndex = events.findIndex((item:any) => item.id === event.id);
           if (previousIndex >= 0 && currentIndex <= previousIndex) continue;
         }
         send(event.type, event.payload, event.id);

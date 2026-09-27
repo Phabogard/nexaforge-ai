@@ -38,11 +38,11 @@ export class ApplicationBuildWorker {
       await mkdir(workspaceRoot,{recursive:true});
       const request=build.request as {prompt:string;maxIterations?:number;maxRepairAttempts?:number};
       const persistedSteps=await this.store.getBuildSteps(build.id);
-      const resumeFrom=persistedSteps.filter(step=>step.status==='completed').map(step=>({stepKey:step.stepKey,phase:step.phase as any,blueprint:step.output && typeof step.output==='object' ? (step.output as Record<string,unknown>).blueprint as any : undefined,repairAttempts:step.output && typeof step.output==='object' ? Number((step.output as Record<string,unknown>).repairAttempts??0) : 0}));
+      const resumeFrom=persistedSteps.filter((step:any)=>step.status==='completed').map((step:any)=>({stepKey:step.stepKey,phase:step.phase as any,blueprint:step.output && typeof step.output==='object' ? (step.output as Record<string,unknown>).blueprint as any : undefined,repairAttempts:step.output && typeof step.output==='object' ? Number((step.output as Record<string,unknown>).repairAttempts??0) : 0}));
       const builder=createApplicationBuilder({model:createConfiguredModelProvider()});
       await this.store.upsertBuildStep({buildId:build.id,stepKey:'plan',phase:'planning',status:'running'});
       await this.store.addBuildEvent({buildId:build.id,eventType:'phase.started',phase:'planning'});
-      const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3,resumeFrom,checkpoint:async checkpoint=>{const previous=persistedSteps.find(step=>step.stepKey===checkpoint.stepKey);const attempt=(previous?.attempt??0)+(checkpoint.status==='running'?1:0);await this.store.upsertBuildStep({buildId:build.id,stepKey:checkpoint.stepKey,phase:checkpoint.phase,status:checkpoint.status??'completed',attempt,output:checkpoint.output??{blueprint:checkpoint.blueprint,repairAttempts:checkpoint.repairAttempts},errorCode:checkpoint.errorCode});if(checkpoint.status!=='failed') await this.store.updateBuild(build.id,{status:'building',phase:checkpoint.phase,repairAttempts:checkpoint.repairAttempts});}},controller.signal);
+      const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3,resumeFrom,checkpoint:async (checkpoint:any)=>{const previous=persistedSteps.find((step:any)=>step.stepKey===checkpoint.stepKey);const attempt=(previous?.attempt??0)+(checkpoint.status==='running'?1:0);await this.store.upsertBuildStep({buildId:build.id,stepKey:checkpoint.stepKey,phase:checkpoint.phase,status:checkpoint.status??'completed',attempt,output:checkpoint.output??{blueprint:checkpoint.blueprint,repairAttempts:checkpoint.repairAttempts},errorCode:checkpoint.errorCode});if(checkpoint.status!=='failed') await this.store.updateBuild(build.id,{status:'building',phase:checkpoint.phase,repairAttempts:checkpoint.repairAttempts});}},controller.signal);
       const phaseMap:Record<string,string>={plan:'planning',scaffold:'scaffolding',code:'coding',install:'installing',test:'testing',repair:'repairing',validate:'validating'};
       for(const step of result.completedSteps) await this.store.upsertBuildStep({buildId:build.id,stepKey:step,phase:phaseMap[step]??result.phase,status:'completed'});
       let deploymentSource: ApplicationDeploymentSource | undefined;
@@ -73,7 +73,7 @@ export class ApplicationBuildWorker {
             projectId: project.id, buildId: build.id, source, workspaceRoot,
             imageName: `nexaforge/${project.id}`, imageTag: build.id, registry, port: container.port
           });
-          deploymentSource = { type: 'image', reference: image.reference, digest: image.digest, registry: image.registry };
+          deploymentSource = { type: 'image', reference: image!.reference, digest: image!.digest, registry: image!.registry };
           await this.store.addBuildEvent({buildId:build.id,eventType:'artifact.image.built',phase:'validating',payload:image});
         }
 

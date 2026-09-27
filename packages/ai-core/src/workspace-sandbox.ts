@@ -24,7 +24,7 @@ function processRunner(command: CommandPolicy, cwd: string, signal?: AbortSignal
     stdio: ["ignore", "pipe", "pipe"]
   });
 
-  let stdout = "", stderr = "", settled = false, closed = false, abortRequested = false;
+  let stdout = "", stderr = "", settled = false, closed = false;
   let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 
   let resolveResult!: (result: { exitCode: number; signal?: string; stdout: string; stderr: string }) => void;
@@ -69,8 +69,8 @@ function processRunner(command: CommandPolicy, cwd: string, signal?: AbortSignal
   };
 
   const onAbort = () => {
-    abortRequested = true;
     terminateProcess("SIGTERM");
+    fail(new Error("WORKSPACE_OPERATION_ABORTED"));
   };
 
   if (signal) {
@@ -87,10 +87,6 @@ function processRunner(command: CommandPolicy, cwd: string, signal?: AbortSignal
 
   child.on("close", (code, closeSignal) => {
     closed = true;
-    if (abortRequested) {
-      fail(new Error("WORKSPACE_OPERATION_ABORTED"));
-      return;
-    }
     finish({ exitCode: code ?? 1, signal: closeSignal ?? undefined, stdout, stderr });
   });
 
