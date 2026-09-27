@@ -78,11 +78,11 @@ async function main() {
     }
 
     const files = (await readdir(migrationDir))
-      .filter(name => /^\\d+_.+\\.sql$/.test(name))
+      .filter(name => /^\d+_.+\.sql$/.test(name))
       .sort();
 
     for (const file of files) {
-      await applyFile(file.replace(/\\.sql$/, ''), join(migrationDir, file));
+      await applyFile(file.replace(/\.sql$/, ''), join(migrationDir, file));
     }
 
     console.log('[db:migrate] complete');
