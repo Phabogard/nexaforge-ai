@@ -54,6 +54,23 @@ describe('workspace sandbox process lifecycle', () => {
     await expect(procPromise).rejects.toThrow('WORKSPACE_OPERATION_ABORTED');
   });
 
+  it('does not reject abort until the child has actually closed', async () => {
+    const ws = await sandbox();
+    await ws.writeFile('delayed_term.js', 'process.on("SIGTERM", () => setTimeout(() => process.exit(0), 350)); setInterval(() => {}, 1000)');
+    const ac = new AbortController();
+    const started = Date.now();
+    const procPromise = ws.exec({ command: 'node', args: ['delayed_term.js'], cwd: '.', timeoutMs: 5000 }, ac.signal);
+    setTimeout(() => ac.abort(), 50);
+
+    const pending = await Promise.race([
+      procPromise.then(() => 'settled', () => 'settled'),
+      new Promise(resolve => setTimeout(() => resolve('pending'), 150))
+    ]);
+    expect(pending).toBe('pending');
+    await expect(procPromise).rejects.toThrow('WORKSPACE_OPERATION_ABORTED');
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+  });
+
   it('handles process ignoring SIGTERM by escalating to SIGKILL and waiting for close', async () => {
     const ws = await sandbox();
     await ws.writeFile('ignore_sigterm.js', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)');
