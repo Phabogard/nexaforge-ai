@@ -1,0 +1,244 @@
+import type { CommandPolicy, WorkspaceExecutor, WorkspacePathPolicy, WorkspaceProcess, ApplicationBuildExecutionPhase } from "./workspace-tools";
+
+export interface ContainerSandboxOptions {
+  root: string;
+  image?: string;
+  memoryMb?: number;
+  cpus?: number;
+}
+
+const MAX_OUTPUT = 200_000;
+
+function quote(value: string): string {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+export function resolveNetworkForPhase(_options: ContainerSandboxOptions, phase?: ApplicationBuildExecutionPhase): "none" | "bridge" {
+  if (phase === "install") {
+    return "bridge";
+  }
+  return "none";
+}
+
+export function dockerCommand(options: ContainerSandboxOptions, command: CommandPolicy, phase?: ApplicationBuildExecutionPhase): CommandPolicy {
+  const image = options.image ?? "node:22-bookworm-slim";
+  const memory = Math.max(128, Math.min(options.memoryMb ?? 1024, 8192));
+  const cpus = Math.max(0.25, Math.min(options.cpus ?? 1, 4));
+  const network = resolveNetworkForPhase(options, phase);
+  return {
+    command: "docker",
+    cwd: command.cwd,
+    timeoutMs: command.timeoutMs,
+    env: command.env,
+    args: [
+      "run", "--rm", "-i",
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--pids-limit=256",
+      "--memory=" + memory + "m",
+      "--cpus=" + cpus,
+      "--network=" + network,
+      "--tmpfs=/tmp:rw,nosuid,nodev,noexec",
+      "--tmpfs=/home/node:rw,nosuid,nodev",
+      "--mount", "type=bind,src=" + options.root + ",dst=/workspace,rw",
+      "--workdir=/workspace",
+      "-e", "HOME=/home/node",
+      "-e", "NODE_ENV=production",
+      "-e", "CI=1",
+      ...Object.entries(command.env ?? {}).flatMap(([k,v]) => ["-e", k + "=" + v]),
+      image,
+      ...command.args.length ? ["sh", "-lc", quote(command.command) + " " + command.args.map(quote).join(" ")] : ["sh", "-lc", quote(command.command)]
+    ]
+  };
+}
+
+export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions): WorkspaceExecutor & {
+  policy: WorkspacePathPolicy;
+  resolve(path: string): string;
+  validateCommand(command: CommandPolicy): void;
+  execForPhase(phase: ApplicationBuildExecutionPhase, command: CommandPolicy, signal?: AbortSignal): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  startProcessForPhase(phase: ApplicationBuildExecutionPhase, command: CommandPolicy, signal?: AbortSignal): Promise<WorkspaceProcess>;
+} {
+  const root = options.root;
+  const base = {
+    policy: { root, allowRead: true, allowWrite: true, allowDelete: true, allowExec: true },
+    resolve(path: string) {
+      if (!path || path.startsWith("/") || path.includes("..")) throw new Error("WORKSPACE_PATH_INVALID");
+      return root + "/" + path;
+    },
+    validateCommand(command: CommandPolicy) {
+      if (!command.command || /[;&|$()<>\r\n`]/.test(command.command)) throw new Error("WORKSPACE_COMMAND_NOT_ALLOWED");
+      for (const arg of command.args) {
+        if (/[;&$<>\r\n`]/.test(arg)) throw new Error("WORKSPACE_COMMAND_ARGUMENT_BLOCKED");
+      }
+    }
+  };
+
+  const execInternal = async (command: CommandPolicy, phase?: ApplicationBuildExecutionPhase, signal?: AbortSignal) => {
+    base.validateCommand(command);
+    if (signal?.aborted) throw new Error("WORKSPACE_OPERATION_ABORTED");
+    const { execFile } = await import("node:child_process");
+    const cmd = dockerCommand(options, command, phase);
+    const child = execFile("docker", cmd.args, { cwd: root, env: { PATH: process.env.PATH ?? "" } });
+
+    return new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolvePromise, rejectPromise) => {
+      let stdout = "", stderr = "", settled = false;
+      let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+
+      const timer = setTimeout(() => {
+        if (!child.killed) {
+          child.kill("SIGTERM");
+          forceKillTimer = setTimeout(() => {
+            if (!child.killed) child.kill("SIGKILL");
+          }, 2000);
+        }
+      }, command.timeoutMs);
+
+      child.stdout?.on("data", d => { stdout = (stdout + String(d)).slice(0, MAX_OUTPUT); });
+      child.stderr?.on("data", d => { stderr = (stderr + String(d)).slice(0, MAX_OUTPUT); });
+
+      const cleanup = () => {
+        if (signal) signal.removeEventListener("abort", onAbort);
+        clearTimeout(timer);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+      };
+
+      const onAbort = () => {
+        if (!child.killed) {
+          child.kill("SIGTERM");
+          forceKillTimer = setTimeout(() => {
+            if (!child.killed) child.kill("SIGKILL");
+          }, 2000);
+        }
+        if (!settled) {
+          settled = true;
+          cleanup();
+          rejectPromise(new Error("WORKSPACE_OPERATION_ABORTED"));
+        }
+      };
+
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      child.on("error", err => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          rejectPromise(err);
+        }
+      });
+
+      child.on("close", code => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          resolvePromise({ exitCode: code ?? 1, stdout, stderr });
+        }
+      });
+    });
+  };
+
+  const startProcessInternal = async (command: CommandPolicy, phase?: ApplicationBuildExecutionPhase, signal?: AbortSignal) => {
+    base.validateCommand(command);
+    if (signal?.aborted) throw new Error("WORKSPACE_OPERATION_ABORTED");
+    const { spawn } = await import("node:child_process");
+    const cmd = dockerCommand(options, command, phase);
+    const child = spawn("docker", cmd.args, { cwd: root, env: { PATH: process.env.PATH ?? "" }, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "", settled = false;
+    let resolveResult!: (value: { exitCode: number; signal?: string; stdout: string; stderr: string }) => void;
+    const result = new Promise<{ exitCode: number; signal?: string; stdout: string; stderr: string }>((resolveP) => { resolveResult = resolveP; });
+
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+    };
+
+    const finish = (value: { exitCode: number; signal?: string; stdout: string; stderr: string }) => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        resolveResult(value);
+      }
+    };
+
+    child.stdout?.on("data", d => { stdout = (stdout + String(d)).slice(0, MAX_OUTPUT); });
+    child.stderr?.on("data", d => { stderr = (stderr + String(d)).slice(0, MAX_OUTPUT); });
+
+    const onAbort = () => {
+      if (!child.killed) {
+        child.kill("SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          if (!child.killed) child.kill("SIGKILL");
+        }, 2000);
+      }
+      finish({ exitCode: 143, signal: "SIGTERM", stdout, stderr });
+    };
+
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    child.on("error", () => {
+      finish({ exitCode: 1, stdout, stderr });
+    });
+
+    child.on("close", (code, sig) => {
+      finish({ exitCode: code ?? 1, signal: sig ?? undefined, stdout, stderr });
+    });
+
+    return {
+      result,
+      kill(sig: NodeJS.Signals = "SIGTERM") {
+        if (!child.killed) {
+          child.kill(sig);
+          const timer = setTimeout(() => {
+            if (!child.killed) child.kill("SIGKILL");
+          }, 2000);
+          child.once("close", () => clearTimeout(timer));
+        }
+      }
+    };
+  };
+
+  return {
+    ...base,
+    async readFile(path, signal) {
+      if (signal?.aborted) throw new Error("WORKSPACE_OPERATION_ABORTED");
+      const { readFile } = await import("node:fs/promises");
+      return readFile(base.resolve(path), "utf8");
+    },
+    async writeFile(path, data, signal) {
+      if (signal?.aborted) throw new Error("WORKSPACE_OPERATION_ABORTED");
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const target = base.resolve(path);
+      await mkdir(target.slice(0, target.lastIndexOf("/")), { recursive: true });
+      await writeFile(target, data, "utf8");
+    },
+    async deleteFile(path, signal) {
+      if (signal?.aborted) throw new Error("WORKSPACE_OPERATION_ABORTED");
+      const { rm } = await import("node:fs/promises");
+      await rm(base.resolve(path));
+    },
+    exec(command, signal) {
+      return execInternal(command, undefined, signal);
+    },
+    startProcess(command, signal) {
+      return startProcessInternal(command, undefined, signal);
+    },
+    execForPhase(phase, command, signal) {
+      return execInternal(command, phase, signal);
+    },
+    startProcessForPhase(phase, command, signal) {
+      return startProcessInternal(command, phase, signal);
+    }
+  };
+}

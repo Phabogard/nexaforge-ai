@@ -21,7 +21,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
       - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @nexaforge/ai-core exec playwright install --with-deps chromium
       - run: pnpm typecheck
       - run: pnpm build
+      - run: pnpm test
