@@ -162,7 +162,8 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 
     let resolveResult!: (value: { exitCode: number; signal?: string; stdout: string; stderr: string }) => void;
-    const result = new Promise<{ exitCode: number; signal?: string; stdout: string; stderr: string }>((resolveP) => { resolveResult = resolveP; });
+    let rejectResult!: (error: Error) => void;
+    const result = new Promise<{ exitCode: number; signal?: string; stdout: string; stderr: string }>((resolveP, rejectP) => { resolveResult = resolveP; rejectResult = rejectP; });
 
     const cleanup = () => {
       if (signal) signal.removeEventListener("abort", onAbort);
@@ -213,7 +214,7 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
         if (!settled) {
           settled = true;
           cleanup();
-          resolveResult({ exitCode: code ?? 1, signal: sig ?? undefined, stdout, stderr });
+          rejectResult(new Error("WORKSPACE_OPERATION_ABORTED"));
         }
         return;
       }
