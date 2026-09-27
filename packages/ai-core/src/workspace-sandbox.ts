@@ -23,29 +23,53 @@ function processRunner(command: CommandPolicy, cwd: string, signal?: AbortSignal
     env: { PATH: process.env.PATH ?? "", HOME: cwd, NODE_ENV: "production", CI: "1", ...(command.env ?? {}) },
     stdio: ["ignore", "pipe", "pipe"]
   });
-  let stdout = "", stderr = "", settled = false;
+
+  let stdout = "", stderr = "", settled = false, closed = false;
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+
   let resolveResult!: (result: { exitCode: number; signal?: string; stdout: string; stderr: string }) => void;
   let rejectResult!: (error: Error) => void;
   const result = new Promise<{ exitCode: number; signal?: string; stdout: string; stderr: string }>((resolvePromise, reject) => {
     resolveResult = resolvePromise;
     rejectResult = reject;
   });
-  const finish = (value: { exitCode: number; signal?: string; stdout: string; stderr: string }) => {
-    if (!settled) { settled = true; resolveResult(value); }
-  };
-  const fail = (error: Error) => {
-    if (!settled) { settled = true; rejectResult(error); }
+
+  const cleanup = () => {
+    if (signal) signal.removeEventListener("abort", onAbort);
+    if (forceKillTimer) clearTimeout(forceKillTimer);
   };
 
-  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  const finish = (value: { exitCode: number; signal?: string; stdout: string; stderr: string }) => {
+    if (!settled) {
+      settled = true;
+      cleanup();
+      resolveResult(value);
+    }
+  };
+
+  const fail = (error: Error) => {
+    if (!settled) {
+      settled = true;
+      cleanup();
+      rejectResult(error);
+    }
+  };
+
+  const terminateProcess = (signalName: NodeJS.Signals = "SIGTERM") => {
+    if (!closed) {
+      try { child.kill(signalName); } catch {}
+      if (!forceKillTimer) {
+        forceKillTimer = setTimeout(() => {
+          if (!closed) {
+            try { child.kill("SIGKILL"); } catch {}
+          }
+        }, 2000);
+      }
+    }
+  };
 
   const onAbort = () => {
-    if (!child.killed) {
-      child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => {
-        if (!child.killed) child.kill("SIGKILL");
-      }, 2000);
-    }
+    terminateProcess("SIGTERM");
     fail(new Error("WORKSPACE_OPERATION_ABORTED"));
   };
 
@@ -58,27 +82,18 @@ function processRunner(command: CommandPolicy, cwd: string, signal?: AbortSignal
   child.stderr?.on("data", chunk => { stderr = (stderr + String(chunk)).slice(0, MAX_OUTPUT); });
 
   child.on("error", error => {
-    if (signal) signal.removeEventListener("abort", onAbort);
-    if (forceKillTimer) clearTimeout(forceKillTimer);
     fail(error);
   });
 
   child.on("close", (code, closeSignal) => {
-    if (signal) signal.removeEventListener("abort", onAbort);
-    if (forceKillTimer) clearTimeout(forceKillTimer);
+    closed = true;
     finish({ exitCode: code ?? 1, signal: closeSignal ?? undefined, stdout, stderr });
   });
 
   return {
     result,
     kill(signalName: NodeJS.Signals = "SIGTERM") {
-      if (!child.killed) {
-        child.kill(signalName);
-        const timer = setTimeout(() => {
-          if (!child.killed) child.kill("SIGKILL");
-        }, 2000);
-        child.once("close", () => clearTimeout(timer));
-      }
+      terminateProcess(signalName);
     }
   };
 }

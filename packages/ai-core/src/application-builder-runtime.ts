@@ -91,7 +91,7 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           : createBuildVerifier({ workspace, packageManager: blueprint.packageManager, cwd: '.' });
 
         if (!has('code')) {
-          const codingTools = createApplicationTools({ workspace, verifier, packageManager: blueprint.packageManager, cwd: '.' });
+          const codingTools = createApplicationTools({ workspace, verifier, packageManager: blueprint.packageManager, cwd: '.', phase: 'coding' });
           const codingAgent = createApplicationCodingAgent({ model: options.model, tools: codingTools.tools });
           const coding = await codingAgent.run({
             prompt: request.prompt,
@@ -124,7 +124,7 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           repairAttempts++;
           checkAbort();
           await checkpoint('repair', 'repairing', 'running', { diagnostics: verification });
-          const repairTools = createApplicationTools({ workspace, verifier, packageManager: blueprint.packageManager, cwd: '.' });
+          const repairTools = createApplicationTools({ workspace, verifier, packageManager: blueprint.packageManager, cwd: '.', phase: 'repair' });
           const repairAgent = createApplicationCodingAgent({ model: options.model, tools: repairTools.tools });
           const repair = await repairAgent.run({
             prompt: [
@@ -166,7 +166,7 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           repairAttempts++;
           checkAbort();
           await checkpoint('repair', 'repairing', 'running', { diagnostics: browser });
-          const repairTools = createApplicationTools({ workspace, verifier, packageManager: blueprint.packageManager, cwd: '.' });
+          const repairTools = createApplicationTools({ workspace, verifier, packageManager: blueprint.packageManager, cwd: '.', phase: 'repair' });
           const repairAgent = createApplicationCodingAgent({ model: options.model, tools: repairTools.tools });
           const repair = await repairAgent.run({
             prompt: [

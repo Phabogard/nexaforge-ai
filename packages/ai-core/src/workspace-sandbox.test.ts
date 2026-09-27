@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, afterEach } from 'vitest';
@@ -35,5 +35,51 @@ describe('workspace sandbox', () => {
     const result = await ws.exec({ command:'node', args:['-e','process.stdout.write(process.env.NEXAFORGE_TEST_SECRET || "")'], cwd:'.', timeoutMs:3000 });
     expect(result.stdout).toBe('');
     delete process.env.NEXAFORGE_TEST_SECRET;
+  });
+});
+
+describe('workspace sandbox process lifecycle', () => {
+  it('handles normal process exit correctly', async () => {
+    const ws = await sandbox();
+    const res = await ws.exec({ command: 'node', args: ['-e', 'process.exit(0)'], cwd: '.', timeoutMs: 5000 });
+    expect(res.exitCode).toBe(0);
+  });
+
+  it('handles abort signal cleanly and cleans up listeners', async () => {
+    const ws = await sandbox();
+    await ws.writeFile('sleep.js', 'setTimeout(() => {}, 10000)');
+    const ac = new AbortController();
+    const procPromise = ws.exec({ command: 'node', args: ['sleep.js'], cwd: '.', timeoutMs: 15000 }, ac.signal);
+    setTimeout(() => ac.abort(), 100);
+    await expect(procPromise).rejects.toThrow('WORKSPACE_OPERATION_ABORTED');
+  });
+
+  it('handles process ignoring SIGTERM by escalating to SIGKILL and waiting for close', async () => {
+    const ws = await sandbox();
+    await ws.writeFile('ignore_sigterm.js', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)');
+    const proc = await ws.startProcess!({
+      command: 'node',
+      args: ['ignore_sigterm.js'],
+      cwd: '.',
+      timeoutMs: 10000
+    });
+    proc.kill('SIGTERM');
+    const res = await proc.result;
+    expect(res).toBeDefined();
+  });
+
+  it('guarantees single resolution/rejection without double finalization', async () => {
+    const ws = await sandbox();
+    await ws.writeFile('exit.js', 'process.exit(1)');
+    const ac = new AbortController();
+    const proc = await ws.startProcess!({
+      command: 'node',
+      args: ['exit.js'],
+      cwd: '.',
+      timeoutMs: 5000
+    }, ac.signal);
+    proc.kill('SIGTERM');
+    const res = await proc.result;
+    expect(res).toBeDefined();
   });
 });

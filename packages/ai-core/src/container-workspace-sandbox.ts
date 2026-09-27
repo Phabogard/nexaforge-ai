@@ -83,20 +83,8 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
     const child = execFile("docker", cmd.args, { cwd: root, env: { PATH: process.env.PATH ?? "" } });
 
     return new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolvePromise, rejectPromise) => {
-      let stdout = "", stderr = "", settled = false;
+      let stdout = "", stderr = "", settled = false, closed = false;
       let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-
-      const timer = setTimeout(() => {
-        if (!child.killed) {
-          child.kill("SIGTERM");
-          forceKillTimer = setTimeout(() => {
-            if (!child.killed) child.kill("SIGKILL");
-          }, 2000);
-        }
-      }, command.timeoutMs);
-
-      child.stdout?.on("data", d => { stdout = (stdout + String(d)).slice(0, MAX_OUTPUT); });
-      child.stderr?.on("data", d => { stderr = (stderr + String(d)).slice(0, MAX_OUTPUT); });
 
       const cleanup = () => {
         if (signal) signal.removeEventListener("abort", onAbort);
@@ -104,13 +92,28 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
         if (forceKillTimer) clearTimeout(forceKillTimer);
       };
 
-      const onAbort = () => {
-        if (!child.killed) {
-          child.kill("SIGTERM");
-          forceKillTimer = setTimeout(() => {
-            if (!child.killed) child.kill("SIGKILL");
-          }, 2000);
+      const terminateProcess = (sig: NodeJS.Signals = "SIGTERM") => {
+        if (!closed) {
+          try { child.kill(sig); } catch {}
+          if (!forceKillTimer) {
+            forceKillTimer = setTimeout(() => {
+              if (!closed) {
+                try { child.kill("SIGKILL"); } catch {}
+              }
+            }, 2000);
+          }
         }
+      };
+
+      const timer = setTimeout(() => {
+        terminateProcess("SIGTERM");
+      }, command.timeoutMs);
+
+      child.stdout?.on("data", d => { stdout = (stdout + String(d)).slice(0, MAX_OUTPUT); });
+      child.stderr?.on("data", d => { stderr = (stderr + String(d)).slice(0, MAX_OUTPUT); });
+
+      const onAbort = () => {
+        terminateProcess("SIGTERM");
         if (!settled) {
           settled = true;
           cleanup();
@@ -135,6 +138,7 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
       });
 
       child.on("close", code => {
+        closed = true;
         if (!settled) {
           settled = true;
           cleanup();
@@ -150,11 +154,11 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
     const { spawn } = await import("node:child_process");
     const cmd = dockerCommand(options, command, phase);
     const child = spawn("docker", cmd.args, { cwd: root, env: { PATH: process.env.PATH ?? "" }, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "", settled = false;
+    let stdout = "", stderr = "", settled = false, closed = false;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+
     let resolveResult!: (value: { exitCode: number; signal?: string; stdout: string; stderr: string }) => void;
     const result = new Promise<{ exitCode: number; signal?: string; stdout: string; stderr: string }>((resolveP) => { resolveResult = resolveP; });
-
-    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
       if (signal) signal.removeEventListener("abort", onAbort);
@@ -169,16 +173,24 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
       }
     };
 
+    const terminateProcess = (sig: NodeJS.Signals = "SIGTERM") => {
+      if (!closed) {
+        try { child.kill(sig); } catch {}
+        if (!forceKillTimer) {
+          forceKillTimer = setTimeout(() => {
+            if (!closed) {
+              try { child.kill("SIGKILL"); } catch {}
+            }
+          }, 2000);
+        }
+      }
+    };
+
     child.stdout?.on("data", d => { stdout = (stdout + String(d)).slice(0, MAX_OUTPUT); });
     child.stderr?.on("data", d => { stderr = (stderr + String(d)).slice(0, MAX_OUTPUT); });
 
     const onAbort = () => {
-      if (!child.killed) {
-        child.kill("SIGTERM");
-        forceKillTimer = setTimeout(() => {
-          if (!child.killed) child.kill("SIGKILL");
-        }, 2000);
-      }
+      terminateProcess("SIGTERM");
       finish({ exitCode: 143, signal: "SIGTERM", stdout, stderr });
     };
 
@@ -192,19 +204,14 @@ export function createContainerWorkspaceSandbox(options: ContainerSandboxOptions
     });
 
     child.on("close", (code, sig) => {
+      closed = true;
       finish({ exitCode: code ?? 1, signal: sig ?? undefined, stdout, stderr });
     });
 
     return {
       result,
       kill(sig: NodeJS.Signals = "SIGTERM") {
-        if (!child.killed) {
-          child.kill(sig);
-          const timer = setTimeout(() => {
-            if (!child.killed) child.kill("SIGKILL");
-          }, 2000);
-          child.once("close", () => clearTimeout(timer));
-        }
+        terminateProcess(sig);
       }
     };
   };
