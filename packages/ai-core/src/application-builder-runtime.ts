@@ -11,6 +11,7 @@ import type { WorkspacePathPolicy } from './workspace-tools.js';
 import { normalizeDependencySpec, validateProjectPath } from './application-policy.js';
 import { createApplicationTools } from './application-tools.js';
 import { createApplicationCodingAgent } from './application-coding-agent.js';
+import { createApplicationReviewer, type ApplicationReviewResult } from './application-reviewer.js';
 
 interface GeneratedFile { path: string; content: string; }
 interface ApplicationBuilderOptions {
@@ -57,6 +58,7 @@ function packageJson(blueprint: ProjectBlueprint): string {
 
 export function createApplicationBuilder(options: ApplicationBuilderOptions): ApplicationBuilder {
   const planner = createApplicationPlanner(options.model);
+  const reviewer = createApplicationReviewer(options.model);
   return {
     async build(request, signal): Promise<ApplicationBuildResult> {
       let phase: ApplicationBuildPhase = 'planning';
@@ -102,6 +104,16 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
             signal
           });
           if (!coding.completed) throw new Error('CODING_AGENT_MAX_ITERATIONS');
+          const review = await reviewer.review({
+            prompt: request.prompt,
+            blueprint,
+            codingEvidence: coding.calls
+          });
+          await checkpoint('review', 'coding', review.approved ? 'completed' : 'failed', review);
+          if (!review.approved) {
+            const blocking = review.issues.filter(issue => issue.severity === 'error');
+            throw new Error('APPLICATION_REVIEW_FAILED:' + blocking.map(issue => issue.message).join(' | ').slice(0, 3000));
+          }
           if (!coding.calls.some(call => call.tool === 'filesystem.write')) {
             await workspace.writeFile('package.json', packageJson(blueprint), signal);
           }
