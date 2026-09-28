@@ -1,4 +1,4 @@
-import type { ModelProvider } from './index';
+import type { ModelProvider } from './index.js';
 
 export class UnconfiguredModelProvider implements ModelProvider {
   async generate(): Promise<string> {
