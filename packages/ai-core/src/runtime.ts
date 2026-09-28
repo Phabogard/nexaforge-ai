@@ -1,6 +1,6 @@
 import type { AgentTask, ToolCall } from '@nexaforge/shared';
-import type { AgentRuntime, Tool } from './index';
-import { ToolRegistry } from './tool-registry';
+import type { AgentRuntime, Tool } from './index.js';
+import { ToolRegistry } from './tool-registry.js';
 
 export interface RuntimeResult {
   calls: ToolCall[];
