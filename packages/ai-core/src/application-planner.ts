@@ -1,6 +1,6 @@
-import type { ApplicationBuildRequest, ProjectBlueprint } from './application-builder';
-import type { ModelProvider } from './index';
-import { normalizeDependencySpec, validateProjectCommand, validateProjectPath } from './application-policy';
+import type { ApplicationBuildRequest, ProjectBlueprint } from './application-builder.js';
+import type { ModelProvider } from './index.js';
+import { normalizeDependencySpec, validateProjectCommand, validateProjectPath } from './application-policy.js';
 
 export interface ApplicationPlanner {
   createBlueprint(request: ApplicationBuildRequest): Promise<ProjectBlueprint>;
