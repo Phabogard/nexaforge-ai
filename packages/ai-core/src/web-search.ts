@@ -1,4 +1,4 @@
-import type { Tool } from './index';
+import type { Tool } from './index.js';
 
 interface WebSearchResponse {
   output_text?: string;
