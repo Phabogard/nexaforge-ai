@@ -1,6 +1,6 @@
-import type { Tool } from './index';
-import type { BuildVerifier } from './build-verifier';
-import type { WorkspaceExecutor } from './workspace-tools';
+import type { Tool } from './index.js';
+import type { BuildVerifier } from './build-verifier.js';
+import type { WorkspaceExecutor } from './workspace-tools.js';
 
 export interface ApplicationToolset { tools: Tool[]; names: string[]; }
 export interface ApplicationToolDependencies {
