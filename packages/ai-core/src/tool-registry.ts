@@ -1,5 +1,5 @@
 import type { AgentMode, AgentTask, ToolCall } from '@nexaforge/shared';
-import type { Tool, ToolContext } from './index';
+import type { Tool, ToolContext } from './index.js';
 
 export type ApprovalDecision = 'allow' | 'require_approval' | 'deny';
 
