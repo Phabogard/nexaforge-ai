@@ -1,5 +1,5 @@
 import { chromium } from "playwright";
-import type { WorkspaceExecutor, WorkspaceProcess } from "./workspace-tools";
+import type { WorkspaceExecutor, WorkspaceProcess } from "./workspace-tools.js";
 
 export interface BrowserValidationResult {
   ok: boolean;
