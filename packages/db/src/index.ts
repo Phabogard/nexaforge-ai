@@ -102,7 +102,11 @@ const toWorkspace = (row: Record<string, unknown>): WorkspaceRecord => ({
 });
 
 class PostgresTaskRepository implements TaskRepository {
-  constructor(private readonly sql: NeonQueryFunction<false, false>) {}
+  private readonly sql: NeonQueryFunction<false, false>;
+
+  constructor(sql: NeonQueryFunction<false, false>) {
+    this.sql = sql;
+  }
 
   async create(input: CreateTaskInput): Promise<TaskRecord> {
     const rows = await this.sql`
