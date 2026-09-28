@@ -14,12 +14,12 @@ async function collectArtifacts(root:string):Promise<Array<{path:string,kind:str
 }
 
 export class ApplicationBuildWorker {
-  private running=false; private timer?:NodeJS.Timeout; private readonly controllers=new Map<string,AbortController>(); private readonly workerId=`application-worker-${process.pid}-${randomUUID()}`; private readonly leaseSeconds=60;
+  private running=false; private timer?:NodeJS.Timeout; private readonly controllers=new Map<string,AbortController>(); private readonly workerId=`application-worker-${process.pid}-${randomUUID()}`; private readonly leaseSeconds=60; private readonly concurrency=Math.max(1,Number(process.env.NEXAFORGE_APPLICATION_WORKER_CONCURRENCY??'2')||2); private active=0;
   constructor(private readonly store:ApplicationRepository,private readonly pollMs=1000,private readonly root=process.env.APPLICATION_WORKSPACE_ROOT??'/tmp/nexaforge-projects'){}
   start(){if(this.running)return;this.running=true;void this.loop();}
   stop(){this.running=false;if(this.timer)clearTimeout(this.timer);for(const c of this.controllers.values())c.abort();this.controllers.clear();}
   cancel(id:string){this.controllers.get(id)?.abort();}
-  private async loop(){while(this.running){try{const build=await this.store.claimNextBuild(this.workerId,this.leaseSeconds);if(build)await this.process(build);}catch(error){console.error('[nexaforge-application-worker]',error);}if(this.running)await new Promise<void>(r=>{this.timer=setTimeout(r,this.pollMs);});}}
+  private async loop(){while(this.running){let claimed=false;while(this.running&&this.active<this.concurrency){try{const build=await this.store.claimNextBuild(this.workerId,this.leaseSeconds);if(!build)break;claimed=true;this.active++;void this.process(build).finally(()=>{this.active--;});}catch(error){console.error('[nexaforge-application-worker]',error);break;}}if(this.running&&this.active===0&&!claimed)await new Promise<void>(r=>{this.timer=setTimeout(r,this.pollMs);});else if(this.running&&this.active>=this.concurrency)await new Promise<void>(r=>{this.timer=setTimeout(r,25);});}}
   private async process(build:ApplicationBuildRecord){
     const controller=new AbortController();this.controllers.set(build.id,controller);const heartbeat=setInterval(()=>{void this.store.renewBuildLease(build.id,this.workerId,this.leaseSeconds).catch(()=>{});},20000);
     const workspaceRoot=join(this.root,build.projectId);
