@@ -60,8 +60,8 @@ export function createSupervisor(tools: Tool[], model: ModelProvider): AgentRunt
   };
 }
 
-export { BoundedAgentExecutor, createToolRegistry } from './runtime';
-export { DefaultToolPolicy, ToolRegistry } from './tool-registry';
-export { echoTool, timeTool } from './tools';
-export { webSearchTool } from './web-search';
+export { BoundedAgentExecutor, createToolRegistry } from './runtime.js';
+export { DefaultToolPolicy, ToolRegistry } from './tool-registry.js';
+export { echoTool, timeTool } from './tools.js';
+export { webSearchTool } from './web-search.js';
 export { OpenAICompatibleProvider, UnconfiguredModelProvider, createConfiguredModelProvider } from './model-provider';
