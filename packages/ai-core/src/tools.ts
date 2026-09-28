@@ -1,4 +1,4 @@
-import type { Tool } from './index';
+import type { Tool } from './index.js';
 
 export const timeTool: Tool<{ timezone?: string }, { iso: string; timezone: string }> = {
   name: 'time.now',
