@@ -1,4 +1,4 @@
-import type { ModelProvider, Tool } from './index';
+import type { ModelProvider, Tool } from './index.js';
 import type { AgentTask } from '@nexaforge/shared';
 
 export interface CodingAgentRequest {
