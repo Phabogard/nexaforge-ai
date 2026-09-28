@@ -1,5 +1,5 @@
-import type { WorkspaceExecutor, WorkspaceProcess } from './workspace-tools';
-import { validateApplicationInBrowser } from './browser-validator';
+import type { WorkspaceExecutor, WorkspaceProcess } from './workspace-tools.js';
+import { validateApplicationInBrowser } from './browser-validator.js';
 
 export interface VerificationResult {
   ok: boolean;
