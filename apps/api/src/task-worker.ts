@@ -20,6 +20,8 @@ export class TaskWorker {
   private running = false;
   private readonly controllers = new Map<string, AbortController>();
   private timer?: NodeJS.Timeout;
+  private readonly concurrency = Math.max(1, Number(process.env.NEXAFORGE_TASK_WORKER_CONCURRENCY ?? '2') || 2);
+  private active = 0;
 
   constructor(private readonly store: WorkerStore, private readonly pollMs = 750) {}
 
@@ -45,14 +47,23 @@ export class TaskWorker {
 
   private async loop(): Promise<void> {
     while (this.running) {
-      try {
-        const task = await this.claim();
-        if (task) await this.process(task);
-      } catch (error) {
-        console.error('[nexaforge-worker]', error);
+      let claimed = false;
+      while (this.running && this.active < this.concurrency) {
+        try {
+          const task = await this.claim();
+          if (!task) break;
+          claimed = true;
+          this.active++;
+          void this.process(task).finally(() => { this.active--; });
+        } catch (error) {
+          console.error('[nexaforge-worker]', error);
+          break;
+        }
       }
       if (!this.running) break;
-      await new Promise<void>(resolve => { this.timer = setTimeout(resolve, this.pollMs); });
+      const delay = this.active >= this.concurrency ? 25 : (claimed ? 0 : this.pollMs);
+      if (delay > 0) await new Promise<void>(resolve => { this.timer = setTimeout(resolve, delay); });
+      else await Promise.resolve();
     }
   }
 
