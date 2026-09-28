@@ -85,7 +85,7 @@ class PostgresTaskRepository implements TaskRepository {
   }
 
   async get(id: string): Promise<TaskRecord | null> {
-    const rows = await this.sql`SELECT id, workspace_id, prompt, mode, max_iterations, budget_cents, result, error_code, iteration_count, created_at, completed_at FROM tasks WHERE id = ${id}::uuid`;
+    const rows = await this.sql`SELECT id, workspace_id, prompt, mode, status, max_iterations, budget_cents, result, error_code, iteration_count, created_at, completed_at FROM tasks WHERE id = ${id}::uuid`;
     return rows.length ? toTask(rows[0] as Record<string, unknown>) : null;
   }
 
