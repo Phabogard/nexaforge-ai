@@ -1,5 +1,5 @@
 import type { AgentMode, AgentTask, ToolCall } from '@nexaforge/shared';
-import { ToolRegistry } from './tool-registry';
+import { ToolRegistry } from './tool-registry.js';
 
 export interface ToolContext { task: AgentTask; signal?: AbortSignal; }
 export interface Tool<I = unknown, O = unknown> { name: string; description: string; risk: 'low' | 'medium' | 'high'; execute(input: I, context: ToolContext): Promise<O>; }
@@ -57,26 +57,26 @@ export function createSupervisor(tools: Tool[], model: ModelProvider, registry =
   };
 }
 
-export { BoundedAgentExecutor, createToolRegistry } from './runtime';
-export { DefaultToolPolicy, ToolRegistry } from './tool-registry';
-export { echoTool, timeTool } from './tools';
-export { webSearchTool } from './web-search';
-export { OpenAICompatibleProvider, UnconfiguredModelProvider, createConfiguredModelProvider } from './model-provider';
-export * from './application-builder';
-export * from './workspace-tools';
-export { createWorkspaceSandbox } from './workspace-sandbox';
-export { createApplicationBuilder } from './application-builder-runtime';
-export { createApplicationCodingAgent } from './application-coding-agent';
-export * from './build-verifier';
-export * from './application-deployer';
-export * from './application-artifact';
-export { createApplicationTools } from './application-tools';
-export { createApplicationPlanner } from './application-planner';
-export * from './application-policy';
-export * from './container-manifest';
-export * from './application-image-builder';
-export * from './application-registry-publisher';
+export { BoundedAgentExecutor, createToolRegistry } from './runtime.js';
+export { DefaultToolPolicy, ToolRegistry } from './tool-registry.js';
+export { echoTool, timeTool } from './tools.js';
+export { webSearchTool } from './web-search.js';
+export { OpenAICompatibleProvider, UnconfiguredModelProvider, createConfiguredModelProvider } from './model-provider.js';
+export * from './application-builder.js';
+export * from './workspace-tools.js';
+export { createWorkspaceSandbox } from './workspace-sandbox.js';
+export { createApplicationBuilder } from './application-builder-runtime.js';
+export { createApplicationCodingAgent } from './application-coding-agent.js';
+export * from './build-verifier.js';
+export * from './application-deployer.js';
+export * from './application-artifact.js';
+export { createApplicationTools } from './application-tools.js';
+export { createApplicationPlanner } from './application-planner.js';
+export * from './application-policy.js';
+export * from './container-manifest.js';
+export * from './application-image-builder.js';
+export * from './application-registry-publisher.js';
 
-export * from './browser-validator';
+export * from './browser-validator.js';
 
-export { createContainerWorkspaceSandbox } from './container-workspace-sandbox';
+export { createContainerWorkspaceSandbox } from './container-workspace-sandbox.js';
