@@ -1,4 +1,4 @@
-import type { ApplicationDeploymentSource } from './application-artifact';
+import type { ApplicationDeploymentSource } from './application-artifact.js';
 
 const RENDER_API = 'https://api.render.com/v1';
 const TERMINAL_RENDER_FAILURES = new Set(['build_failed','update_failed','canceled','pre_deploy_failed','deactivated']);
