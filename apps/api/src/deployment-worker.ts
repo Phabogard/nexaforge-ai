@@ -11,6 +11,8 @@ export class ApplicationDeploymentWorker {
   private readonly controllers = new Map<string, AbortController>();
   private readonly workerId = `deployment-worker-${process.pid}-${randomUUID()}`;
   private readonly leaseSeconds = 60;
+  private readonly concurrency = Math.max(1, Number(process.env.NEXAFORGE_DEPLOYMENT_WORKER_CONCURRENCY ?? '2') || 2);
+  private active = 0;
 
   constructor(private readonly repository: ApplicationRepository, private readonly pollMs = 1000) {
     this.schedule();
@@ -36,10 +38,14 @@ export class ApplicationDeploymentWorker {
     if (this.running) return this.schedule();
     this.running = true;
     try {
-      const deployment = await this.repository.claimNextDeployment(this.workerId, this.leaseSeconds);
-      if (deployment) await this.process(deployment);
-    } catch {
-      // Keep the worker alive.
+      while (!this.stopped && this.active < this.concurrency) {
+        const deployment = await this.repository.claimNextDeployment(this.workerId, this.leaseSeconds);
+        if (!deployment) break;
+        this.active++;
+        void this.process(deployment).finally(() => { this.active--; });
+      }
+    } catch (error) {
+      console.error('[nexaforge-deployment-worker]', error);
     } finally {
       this.running = false;
       this.schedule();
