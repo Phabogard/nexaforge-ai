@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
-import type { ApplicationArtifact, ApplicationArtifactPublisher, ApplicationDeploymentSource } from './application-artifact';
-import { validateApplicationDeploymentSource } from './application-artifact';
+import type { ApplicationArtifact, ApplicationArtifactPublisher, ApplicationDeploymentSource } from './application-artifact.js';
+import { validateApplicationDeploymentSource } from './application-artifact.js';
 
 export interface ContainerRegistryCommandExecutor {
   exec(command:string,args:string[],cwd:string,signal?:AbortSignal):Promise<{exitCode:number;stdout:string;stderr:string}>;
