@@ -67,6 +67,8 @@ export * from './workspace-tools.js';
 export { createWorkspaceSandbox } from './workspace-sandbox.js';
 export { createApplicationBuilder } from './application-builder-runtime.js';
 export { createApplicationCodingAgent } from './application-coding-agent.js';
+export { createApplicationReviewer } from './application-reviewer.js';
+export * from './application-reviewer.js';
 export * from './build-verifier.js';
 export * from './application-deployer.js';
 export * from './application-artifact.js';
