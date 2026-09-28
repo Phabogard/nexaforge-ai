@@ -1,5 +1,5 @@
-import type { ProjectBlueprint } from './application-builder';
-import { validateProjectCommand } from './application-policy';
+import type { ProjectBlueprint } from './application-builder.js';
+import { validateProjectCommand } from './application-policy.js';
 
 export interface ContainerManifest {
   dockerfile: string;
