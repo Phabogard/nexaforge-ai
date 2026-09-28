@@ -1,16 +1,16 @@
-import type { ModelProvider } from './index';
+import type { ModelProvider } from './index.js';
 import type {
   ApplicationBuildRequest, ApplicationBuildResult, ApplicationBuilder,
   ApplicationBuildPhase, ProjectBlueprint
-} from './application-builder';
-import { createApplicationPlanner } from './application-planner';
-import { createBuildVerifier, type BuildVerifier } from './build-verifier';
-import { createWorkspaceSandbox } from './workspace-sandbox';
-import { createContainerWorkspaceSandbox } from './container-workspace-sandbox';
-import type { WorkspacePathPolicy } from './workspace-tools';
-import { normalizeDependencySpec, validateProjectPath } from './application-policy';
-import { createApplicationTools } from './application-tools';
-import { createApplicationCodingAgent } from './application-coding-agent';
+} from './application-builder.js';
+import { createApplicationPlanner } from './application-planner.js';
+import { createBuildVerifier, type BuildVerifier } from './build-verifier.js';
+import { createWorkspaceSandbox } from './workspace-sandbox.js';
+import { createContainerWorkspaceSandbox } from './container-workspace-sandbox.js';
+import type { WorkspacePathPolicy } from './workspace-tools.js';
+import { normalizeDependencySpec, validateProjectPath } from './application-policy.js';
+import { createApplicationTools } from './application-tools.js';
+import { createApplicationCodingAgent } from './application-coding-agent.js';
 
 interface GeneratedFile { path: string; content: string; }
 interface ApplicationBuilderOptions {
