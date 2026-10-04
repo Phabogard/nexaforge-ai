@@ -29,7 +29,6 @@ const host = process.env.HOST ?? '0.0.0.0';
 async function start() {
   if (buildEnabled) assertApplicationWorkerIsolation();
   buildWorker?.start();
-  deploymentWorker?.start();
   await app.listen({ port, host });
 }
 
