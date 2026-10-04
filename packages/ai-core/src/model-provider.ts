@@ -33,18 +33,33 @@ export class OpenAICompatibleProvider implements ModelProvider {
     try {
       const response = await fetch(`${this.options.baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.options.apiKey}` },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.options.apiKey}`
+        },
         body: JSON.stringify({
           model: this.options.model,
           messages: [
             { role: 'system', content: input.system },
-            ...input.messages.map(message => ({ role: message.role === 'assistant' ? 'assistant' : 'user', content: message.content }))
-          ],
-          temperature: 0
+            ...input.messages.map(message => ({
+              role: message.role === 'assistant' ? 'assistant' : 'user',
+              content: message.content
+            }))
+          ]
         }),
         signal: controller.signal
       });
-      if (!response.ok) throw new Error(`MODEL_HTTP_${response.status}`);
+
+      if (!response.ok) {
+        const upstreamBody = await response.text();
+        console.error('Model provider request failed', {
+          status: response.status,
+          model: this.options.model,
+          body: upstreamBody.slice(0, 2000)
+        });
+        throw new Error(`MODEL_HTTP_${response.status}`);
+      }
+
       const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
       const content = data.choices?.[0]?.message?.content;
       if (typeof content !== 'string' || !content.trim()) throw new Error('MODEL_EMPTY_RESPONSE');
