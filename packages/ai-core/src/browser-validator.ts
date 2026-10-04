@@ -1,5 +1,4 @@
-import { chromium } from "playwright";
-import type { WorkspaceExecutor, WorkspaceProcess } from "./workspace-tools.js";
+import type { WorkspaceExecutor, WorkspaceProcess } from './workspace-tools.js';
 
 export interface BrowserValidationResult {
   ok: boolean;
@@ -20,108 +19,54 @@ export interface BrowserValidatorOptions {
   executablePath?: string;
 }
 
-export async function validateApplicationInBrowser(
-  options: BrowserValidatorOptions,
-  signal?: AbortSignal
-): Promise<BrowserValidationResult> {
+export async function validateApplicationInBrowser(options: BrowserValidatorOptions, signal?: AbortSignal): Promise<BrowserValidationResult> {
   const port = options.port ?? 3000;
-  const url = "http://127.0.0.1:" + port + (options.path ?? "/");
+  const url = `http://127.0.0.1:${port}${options.path ?? '/'}`;
   const startFn = (options.workspace as any).startProcessForPhase
-    ? (cmd: any, sig?: AbortSignal) => (options.workspace as any).startProcessForPhase("browser", cmd, sig)
+    ? (cmd: any, sig?: AbortSignal) => (options.workspace as any).startProcessForPhase('browser', cmd, sig)
     : options.workspace.startProcess
-    ? (cmd: any, sig?: AbortSignal) => options.workspace.startProcess!(cmd, sig)
-    : undefined;
+      ? (cmd: any, sig?: AbortSignal) => options.workspace.startProcess!(cmd, sig)
+      : undefined;
 
-  if (!startFn) return { ok: false, url, diagnostics: ["workspace executor does not support long-running processes"] };
+  if (!startFn) return { ok: false, url, diagnostics: ['workspace executor does not support long-running processes'] };
 
   let appProcess: WorkspaceProcess | undefined;
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
-
   try {
-    appProcess = await startFn({
-      command: options.command.command,
-      args: options.command.args,
-      cwd: options.cwd ?? ".",
-      timeoutMs: options.startupTimeoutMs ?? 10000,
-      env: { PORT: String(port) }
-    }, signal);
-
+    appProcess = await startFn({ command: options.command.command, args: options.command.args, cwd: options.cwd ?? '.', timeoutMs: options.startupTimeoutMs ?? 10000, env: { PORT: String(port) } }, signal);
     const deadline = Date.now() + (options.startupTimeoutMs ?? 10000);
-    let lastError = "browser target not ready";
+    let lastError = 'application target not ready';
 
     while (Date.now() < deadline) {
-      if (signal?.aborted) throw new Error("WORKSPACE_OPERATION_ABORTED");
+      if (signal?.aborted) throw new Error('WORKSPACE_OPERATION_ABORTED');
+      if (!appProcess) return { ok: false, url, diagnostics: ['failed to start process'] };
 
-      let timer: any | undefined;
-      if (!appProcess) return { ok: false, url, diagnostics: ["failed to start process"] };
-      const earlyExit = await Promise.race([
-        appProcess.result,
-        new Promise<undefined>(resolve => { timer = setTimeout(resolve, 200); })
-      ]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const earlyExit = await Promise.race([appProcess.result, new Promise<undefined>(resolve => { timer = setTimeout(resolve, 200); })]);
       if (timer) clearTimeout(timer);
-
-      if (earlyExit && appProcess) {
+      if (earlyExit) {
         const exitResult = earlyExit as { stderr: string; stdout: string };
-        return {
-          ok: false,
-          url,
-          diagnostics: ["application process exited before browser validation", exitResult.stderr, exitResult.stdout].filter(Boolean).slice(0, 8)
-        };
+        return { ok: false, url, diagnostics: ['application process exited before HTTP validation', exitResult.stderr, exitResult.stdout].filter(Boolean).slice(0, 8) };
       }
 
       try {
-        browser = await chromium.launch({
-          headless: true,
-          executablePath: options.executablePath || undefined,
-          args: [
-            "--disable-dev-shm-usage",
-            ...(globalThis.process?.env?.NEXAFORGE_BROWSER_NO_SANDBOX === "true" ? ["--no-sandbox"] : [])
-          ]
-        });
-        const page = await browser.newPage();
-        page.setDefaultNavigationTimeout(options.navigationTimeoutMs ?? 10000);
-        const response = await page.goto(url, { waitUntil: "domcontentloaded" });
-        if (!response) {
-          lastError = "browser navigation returned no response";
-        } else if (response.status() >= 200 && response.status() < 500) {
-          const title = await page.title().catch(() => undefined);
-          await browser.close();
-          browser = undefined;
-          return {
-            ok: true,
-            status: response.status(),
-            url: response.url(),
-            title,
-            diagnostics: ["browser smoke test passed: HTTP " + response.status(), title ? "page title: " + title : "page title unavailable"]
-          };
-        } else {
-          lastError = "browser navigation returned HTTP " + response.status();
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), options.navigationTimeoutMs ?? 10000);
+        const response = await fetch(url, { signal: controller.signal, redirect: 'manual' }).finally(() => clearTimeout(timeout));
+        if (response.status >= 200 && response.status < 500) {
+          const title = (await response.text()).match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim();
+          return { ok: true, status: response.status, url, title, diagnostics: [`HTTP smoke test passed: ${response.status}`, title ? `page title: ${title}` : 'page title unavailable'] };
         }
-        await browser.close();
-        browser = undefined;
+        lastError = `HTTP validation returned ${response.status}`;
       } catch (error) {
-        await browser?.close().catch(() => undefined);
-        browser = undefined;
         lastError = error instanceof Error ? error.message : String(error);
       }
     }
 
-    return {
-      ok: false,
-      url,
-      diagnostics: ["browser validation timed out after " + (options.startupTimeoutMs ?? 10000) + "ms", lastError]
-    };
+    return { ok: false, url, diagnostics: [`HTTP validation timed out after ${options.startupTimeoutMs ?? 10000}ms`, lastError] };
   } finally {
-    if (browser) {
-      await browser.close().catch(() => undefined);
-      browser = undefined;
-    }
     if (appProcess) {
-      appProcess.kill("SIGTERM");
-      await Promise.race([
-        appProcess.result,
-        new Promise(r => setTimeout(r, 500))
-      ]).catch(() => undefined);
+      appProcess.kill('SIGTERM');
+      await Promise.race([appProcess.result, new Promise(resolve => setTimeout(resolve, 500))]).catch(() => undefined);
     }
   }
 }
