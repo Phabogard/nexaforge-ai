@@ -67,8 +67,11 @@ export default function Home() {
 
   async function ensureWorkspace() {
     if (workspace) return workspace;
-    const response = await fetch(`${apiUrl}/api/v1/workspaces/default`);
-    if (!response.ok) throw new Error('Impossible de créer ou récupérer le workspace par défaut');
+    const response = await fetch(`${apiUrl}/api/v1/dev/bootstrap`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'dev@nexaforge.local', displayName: 'NexaForge Developer', workspaceName: 'NexaForge Dev' })
+    });
+    if (!response.ok) throw new Error('Impossible de créer le workspace de développement');
     const data = await response.json();
     window.localStorage.setItem('nexaforge.workspace', JSON.stringify(data.workspace));
     setWorkspace(data.workspace);
