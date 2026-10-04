@@ -19,6 +19,8 @@ export interface AgentExecutionLimits {
   maxIterations: number;
   maxDurationMs: number;
   maxRecursionDepth: number;
+  maxToolCalls: number;
+  maxModelCalls: number;
 }
 
 export interface AgentConfig {
@@ -39,6 +41,8 @@ export interface AgentExecutionContext {
   taskId?: string;
   currentDepth: number;
   currentIteration: number;
+  toolCallCount?: number;
+  modelCallCount?: number;
   startTime: number;
   signal?: AbortSignal;
 }
@@ -46,7 +50,9 @@ export interface AgentExecutionContext {
 export const DEFAULT_EXECUTION_LIMITS: AgentExecutionLimits = {
   maxIterations: 12,
   maxDurationMs: 300000, // 5 minutes
-  maxRecursionDepth: 3
+  maxRecursionDepth: 3,
+  maxToolCalls: 20,
+  maxModelCalls: 15
 };
 
 export class AgentRuntime {
@@ -59,6 +65,12 @@ export class AgentRuntime {
     }
     if (ctx.currentIteration > limits.maxIterations) {
       throw new Error(`MAX_AGENT_ITERATIONS_EXCEEDED: ${ctx.currentIteration} > ${limits.maxIterations}`);
+    }
+    if (ctx.toolCallCount !== undefined && ctx.toolCallCount > limits.maxToolCalls) {
+      throw new Error(`MAX_AGENT_TOOL_CALLS_EXCEEDED: ${ctx.toolCallCount} > ${limits.maxToolCalls}`);
+    }
+    if (ctx.modelCallCount !== undefined && ctx.modelCallCount > limits.maxModelCalls) {
+      throw new Error(`MAX_AGENT_MODEL_CALLS_EXCEEDED: ${ctx.modelCallCount} > ${limits.maxModelCalls}`);
     }
     if (Date.now() - ctx.startTime > limits.maxDurationMs) {
       throw new Error(`MAX_AGENT_DURATION_EXCEEDED: ${Date.now() - ctx.startTime}ms > ${limits.maxDurationMs}ms`);

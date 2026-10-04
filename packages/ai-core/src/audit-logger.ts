@@ -1,5 +1,7 @@
 import type { AuditLogInput } from '@nexaforge/shared';
 import type { PermissionRepository } from '@nexaforge/db';
+import { AuditPayloadSanitizer } from './audit-payload-sanitizer.js';
+import { CapabilityEngine } from './capability-engine.js';
 
 export class AuditLogger {
   private inMemoryLogs: AuditLogInput[] = [];
@@ -7,12 +9,14 @@ export class AuditLogger {
   constructor(private repository?: PermissionRepository | null) {}
 
   async log(input: AuditLogInput): Promise<void> {
+    const sanitizedPayload = AuditPayloadSanitizer.sanitize(input.payload ?? {}) as Record<string, unknown>;
+
     const entry: AuditLogInput = {
       ...input,
-      payload: input.payload ?? {}
+      payload: sanitizedPayload
     };
 
-    this.inMemoryLogs.push(entry);
+    const riskLevel = CapabilityEngine.getRiskLevel(input.capability);
 
     if (this.repository) {
       try {
@@ -29,12 +33,18 @@ export class AuditLogger {
           action: input.action,
           status: input.status,
           reason: input.reason,
-          payload: input.payload
+          payload: sanitizedPayload
         });
       } catch (err) {
-        console.error('Failed to write audit log to DB:', err);
+        // Fail-closed for HIGH / CRITICAL actions if DB audit logging fails
+        if (riskLevel === 'HIGH' || riskLevel === 'CRITICAL') {
+          throw new Error(`PERSISTENT_AUDIT_LOG_FAILED: Required persistent audit trail failed for ${riskLevel} risk action ${input.capability}. ${String(err)}`);
+        }
+        console.warn(`[AUDIT_LOG_WARN] Failed to write non-critical audit log to DB for ${input.capability}:`, err);
       }
     }
+
+    this.inMemoryLogs.push(entry);
   }
 
   getLogs(): AuditLogInput[] {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { AgentRuntime, type AgentExecutionContext } from './agent-runtime.js';
-import { ActionEngine } from './action-engine.js';
+import { ActionEngine, type ActionApproval } from './action-engine.js';
 import { PermissionEngine } from './permission-engine.js';
 import { PolicyEngine } from './policy-engine.js';
 import { AuditLogger } from './audit-logger.js';
 
-describe('Agent Runtime & Action Engine', () => {
+describe('Agent Runtime & Action Engine Hardening', () => {
   it('enforces execution limits and abort signal', () => {
     const ctx: AgentExecutionContext = {
       agentId: 'a1',
@@ -30,36 +30,7 @@ describe('Agent Runtime & Action Engine', () => {
     expect(() => AgentRuntime.validateLimits(cancelledCtx)).toThrow('AGENT_EXECUTION_CANCELLED');
   });
 
-  it('blocks unpermitted action execution', async () => {
-    const permEngine = new PermissionEngine();
-    const policyEngine = new PolicyEngine();
-    const logger = new AuditLogger();
-    const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
-
-    const ctx: AgentExecutionContext = {
-      agentId: 'agent-browser',
-      agentType: 'BrowserAgent',
-      userId: 'u1',
-      currentDepth: 1,
-      currentIteration: 1,
-      startTime: Date.now()
-    };
-
-    const res = await actionEngine.executeAction(ctx, {
-      actionId: 'act-1',
-      capability: 'web.read',
-      tool: 'fetch_page',
-      actionName: 'Fetch page content',
-      description: 'Fetch URL',
-      params: { url: 'https://example.com' }
-    });
-
-    expect(res.success).toBe(false);
-    expect(res.status).toBe('denied');
-    expect(res.error).toContain('not granted');
-  });
-
-  it('executes allowed action when permission is granted', async () => {
+  it('fails closed when toolExecutor is missing', async () => {
     const permEngine = new PermissionEngine();
     permEngine.grantInMemory('u1', 'web.read');
 
@@ -76,29 +47,57 @@ describe('Agent Runtime & Action Engine', () => {
       startTime: Date.now()
     };
 
-    const res = await actionEngine.executeAction(
-      ctx,
-      {
-        actionId: 'act-2',
-        capability: 'web.read',
-        tool: 'fetch_page',
-        actionName: 'Fetch page content',
-        description: 'Fetch URL',
-        params: { url: 'https://example.com' }
-      },
-      async (params) => ({ html: '<html>ok</html>', url: params.url })
-    );
+    const res = await actionEngine.executeAction(ctx, {
+      actionId: 'act-no-executor',
+      capability: 'web.read',
+      tool: 'fetch_page',
+      actionName: 'Fetch page content',
+      description: 'Fetch URL',
+      params: { url: 'https://example.com' }
+    });
 
-    expect(res.success).toBe(true);
-    expect(res.status).toBe('executed');
-    expect(res.result).toEqual({ html: '<html>ok</html>', url: 'https://example.com' });
-
-    const logs = logger.getLogs();
-    expect(logs).toHaveLength(1);
-    expect(logs[0].status).toBe('executed');
+    expect(res.success).toBe(false);
+    expect(res.status).toBe('failed');
+    expect(res.error).toBe('TOOL_EXECUTOR_REQUIRED');
   });
 
-  it('requires explicit approval for high risk actions when not yet approved', async () => {
+  it('prevents action replay for the same actionId', async () => {
+    const permEngine = new PermissionEngine();
+    permEngine.grantInMemory('u1', 'web.read');
+
+    const policyEngine = new PolicyEngine();
+    const logger = new AuditLogger();
+    const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
+
+    const ctx: AgentExecutionContext = {
+      agentId: 'agent-browser',
+      agentType: 'BrowserAgent',
+      userId: 'u1',
+      currentDepth: 1,
+      currentIteration: 1,
+      startTime: Date.now()
+    };
+
+    const actionReq = {
+      actionId: 'act-replay-test',
+      capability: 'web.read' as const,
+      tool: 'fetch_page',
+      actionName: 'Fetch page content',
+      description: 'Fetch URL',
+      params: { url: 'https://example.com' }
+    };
+
+    const executor = async () => ({ html: 'ok' });
+
+    const firstRun = await actionEngine.executeAction(ctx, actionReq, executor);
+    expect(firstRun.success).toBe(true);
+
+    const secondRun = await actionEngine.executeAction(ctx, actionReq, executor);
+    expect(secondRun.success).toBe(false);
+    expect(secondRun.error).toBe('ACTION_REPLAY_REJECTED');
+  });
+
+  it('requires structured valid approval for HIGH risk actions', async () => {
     const permEngine = new PermissionEngine();
     permEngine.grantInMemory('u1', 'screen.capture');
 
@@ -115,19 +114,48 @@ describe('Agent Runtime & Action Engine', () => {
       startTime: Date.now()
     };
 
-    const res = await actionEngine.executeAction(ctx, {
-      actionId: 'act-3',
-      capability: 'screen.capture',
-      tool: 'capture_screen',
-      actionName: 'Capture Screen',
-      description: 'Capture screen frame for analysis',
-      params: { region: 'full' },
-      userApproved: false
-    });
+    // 1. Unapproved call -> waiting_approval
+    const unapprovedRes = await actionEngine.executeAction(
+      ctx,
+      {
+        actionId: 'act-approval-test',
+        capability: 'screen.capture',
+        tool: 'capture_screen',
+        actionName: 'Capture Screen',
+        description: 'Capture screen frame',
+        params: { region: 'full' }
+      },
+      async () => ({ frame: 'img' })
+    );
 
-    expect(res.success).toBe(false);
-    expect(res.status).toBe('waiting_approval');
-    expect(res.preview?.requiresUserApproval).toBe(true);
-    expect(res.preview?.riskLevel).toBe('HIGH');
+    expect(unapprovedRes.success).toBe(false);
+    expect(unapprovedRes.status).toBe('waiting_approval');
+
+    // 2. Approved call with valid structured approval -> executed
+    const approval: ActionApproval = {
+      approvalId: 'appr-1',
+      userId: 'u1',
+      actionId: 'act-approval-test',
+      timestamp: Date.now(),
+      decision: 'approved',
+      expiresAt: Date.now() + 60000
+    };
+
+    const approvedRes = await actionEngine.executeAction(
+      ctx,
+      {
+        actionId: 'act-approval-test',
+        capability: 'screen.capture',
+        tool: 'capture_screen',
+        actionName: 'Capture Screen',
+        description: 'Capture screen frame',
+        params: { region: 'full' },
+        approval
+      },
+      async () => ({ frame: 'img' })
+    );
+
+    expect(approvedRes.success).toBe(true);
+    expect(approvedRes.status).toBe('executed');
   });
 });

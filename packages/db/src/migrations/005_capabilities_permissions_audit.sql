@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS permissions (
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   agent_id VARCHAR(128),
   capability VARCHAR(128) NOT NULL,
-  status VARCHAR(32) NOT NULL DEFAULT 'granted',
+  status VARCHAR(32) NOT NULL DEFAULT 'granted' CHECK (status IN ('granted', 'revoked', 'denied', 'expired')),
   scope JSONB DEFAULT '{}'::jsonb,
   expires_at TIMESTAMPTZ,
   granted_by VARCHAR(128),
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS consent_records (
   user_id VARCHAR(128) NOT NULL,
   capability VARCHAR(128) NOT NULL,
   action VARCHAR(128) NOT NULL,
-  decision VARCHAR(32) NOT NULL,
+  decision VARCHAR(32) NOT NULL CHECK (decision IN ('granted', 'denied')),
   context JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -31,8 +31,8 @@ CREATE TABLE IF NOT EXISTS security_policies (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   capability VARCHAR(128) NOT NULL,
-  risk_level VARCHAR(32) NOT NULL DEFAULT 'MEDIUM',
-  policy_action VARCHAR(32) NOT NULL DEFAULT 'require_approval',
+  risk_level VARCHAR(32) NOT NULL DEFAULT 'MEDIUM' CHECK (risk_level IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+  policy_action VARCHAR(32) NOT NULL DEFAULT 'require_approval' CHECK (policy_action IN ('allow', 'deny', 'require_approval')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   request_id VARCHAR(128),
   actor VARCHAR(128) NOT NULL,
-  actor_type VARCHAR(64) NOT NULL,
+  actor_type VARCHAR(64) NOT NULL CHECK (actor_type IN ('user', 'agent', 'system')),
   user_id VARCHAR(128),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
   agent_id VARCHAR(128),
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   capability VARCHAR(128) NOT NULL,
   tool VARCHAR(128),
   action VARCHAR(128) NOT NULL,
-  status VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL CHECK (status IN ('allowed', 'denied', 'approved', 'rejected', 'failed', 'executed')),
   reason TEXT,
   payload JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   user_id VARCHAR(128) NOT NULL,
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   agent_type VARCHAR(64) NOT NULL,
-  status VARCHAR(32) NOT NULL DEFAULT 'active',
+  status VARCHAR(32) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'expired', 'revoked')),
   granted_capabilities JSONB DEFAULT '[]'::jsonb,
   metadata JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

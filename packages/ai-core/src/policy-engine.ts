@@ -2,21 +2,32 @@ import type { PolicyCheckRequest, PolicyCheckResult, RiskLevel, PolicyDecision }
 import type { PermissionRepository } from '@nexaforge/db';
 import { CapabilityEngine } from './capability-engine.js';
 
+const VALID_RISK_LEVELS = new Set<RiskLevel>(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
+const VALID_POLICY_DECISIONS = new Set<PolicyDecision>(['allow', 'deny', 'require_approval']);
+
 export class PolicyEngine {
   constructor(private repository?: PermissionRepository | null) {}
 
   async evaluatePolicy(req: PolicyCheckRequest): Promise<PolicyCheckResult> {
-    const riskLevel: RiskLevel = req.riskLevel ?? CapabilityEngine.getRiskLevel(req.capability);
+    let riskLevel: RiskLevel = req.riskLevel ?? CapabilityEngine.getRiskLevel(req.capability);
+    if (!VALID_RISK_LEVELS.has(riskLevel)) {
+      riskLevel = 'HIGH'; // Fallback to HIGH risk if invalid risk level supplied
+    }
 
     // 1. Check DB custom policy if available
     if (this.repository) {
       const customPolicy = await this.repository.getPolicy(req.capability, req.workspaceId);
       if (customPolicy) {
-        return {
-          decision: customPolicy.policyAction as PolicyDecision,
-          riskLevel: customPolicy.riskLevel as RiskLevel,
-          reason: 'Custom security policy applied'
-        };
+        const policyAction = customPolicy.policyAction as PolicyDecision;
+        const customRisk = customPolicy.riskLevel as RiskLevel;
+
+        if (VALID_POLICY_DECISIONS.has(policyAction) && VALID_RISK_LEVELS.has(customRisk)) {
+          return {
+            decision: policyAction,
+            riskLevel: customRisk,
+            reason: 'Custom security policy applied'
+          };
+        }
       }
     }
 
