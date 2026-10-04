@@ -5,6 +5,7 @@
     "moduleResolution": "NodeNext",
     "strict": false,
     "noImplicitAny": false,
+    "forceConsistentCasingInFileNames": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": true,
