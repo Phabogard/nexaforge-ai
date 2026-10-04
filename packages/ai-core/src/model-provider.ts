@@ -6,6 +6,24 @@ export class UnconfiguredModelProvider implements ModelProvider {
   }
 }
 
+export class MockModelProvider implements ModelProvider {
+  async generate(input: { system: string; messages: Array<{ role: string; content: string }> }): Promise<string> {
+    if (input.system.includes('array of steps')) {
+      return JSON.stringify([
+        {
+          id: 'step-1',
+          objective: 'Informer sur l execution',
+          mode: 'auto',
+          tool: 'echo',
+          input: { message: 'NexaForge task processed successfully' },
+          requiresApproval: false
+        }
+      ]);
+    }
+    return 'Mission accomplie. La tâche NexaForge a été traitée avec succès.';
+  }
+}
+
 export class OpenAICompatibleProvider implements ModelProvider {
   constructor(private readonly options: { baseUrl: string; apiKey: string; model: string; timeoutMs?: number }) {}
 
@@ -41,6 +59,11 @@ export function createConfiguredModelProvider(): ModelProvider {
   const baseUrl = process.env.MODEL_BASE_URL;
   const apiKey = process.env.MODEL_API_KEY;
   const model = process.env.MODEL_NAME;
-  if (!baseUrl || !apiKey || !model) throw new Error('MODEL_PROVIDER_NOT_CONFIGURED');
+  if (!baseUrl || !apiKey || !model) {
+    if (process.env.MOCK_MODEL === 'true' || process.env.NODE_ENV === 'test') {
+      return new MockModelProvider();
+    }
+    throw new Error('MODEL_PROVIDER_NOT_CONFIGURED');
+  }
   return new OpenAICompatibleProvider({ baseUrl, apiKey, model });
 }

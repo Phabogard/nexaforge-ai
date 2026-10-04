@@ -20,8 +20,9 @@ jobs:
           version: 10.15.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
-      - run: pnpm install --no-frozen-lockfile
-      - run: pnpm typecheck
+      - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
