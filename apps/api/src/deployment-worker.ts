@@ -7,6 +7,7 @@ export class ApplicationDeploymentWorker {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
   private stopped = false;
+  private readonly enabled = process.env.NEXAFORGE_DEPLOYMENT_WORKER_ENABLED === 'true';
   private readonly cancelled = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly workerId = `deployment-worker-${process.pid}-${randomUUID()}`;
@@ -15,7 +16,7 @@ export class ApplicationDeploymentWorker {
   private active = 0;
 
   constructor(private readonly repository: ApplicationRepository, private readonly pollMs = 1000) {
-    this.schedule();
+    if (this.enabled) this.schedule();
   }
 
   cancel(deploymentId: string) {
@@ -29,12 +30,12 @@ export class ApplicationDeploymentWorker {
   }
 
   private schedule() {
-    if (this.stopped) return;
+    if (this.stopped || !this.enabled) return;
     this.timer = setTimeout(() => void this.tick(), this.pollMs);
   }
 
   private async tick() {
-    if (this.stopped) return;
+    if (this.stopped || !this.enabled) return;
     if (this.running) return this.schedule();
     this.running = true;
     try {
