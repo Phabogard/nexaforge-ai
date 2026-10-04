@@ -4,10 +4,10 @@
   "packageManager": "pnpm@10.15.0",
   "scripts": {
     "dev": "turbo dev",
-    "build": "turbo build",
+    "build": "turbo build --force",
     "lint": "turbo lint",
-    "test": "turbo test",
-    "typecheck": "turbo typecheck"
+    "test": "turbo test --force",
+    "typecheck": "turbo typecheck --force"
   },
   "devDependencies": {
     "turbo": "^2.5.6",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createSupervisor, type ModelProvider, type Tool } from './index';
-import { BoundedAgentExecutor, createToolRegistry } from './runtime';
+import { createSupervisor, type ModelProvider, type Tool } from './index.js';
+import { BoundedAgentExecutor, createToolRegistry } from './runtime.js';
 
 const task = {
   id: 'task-1', workspaceId: 'workspace-1', prompt: 'What time is it?', mode: 'auto' as const,

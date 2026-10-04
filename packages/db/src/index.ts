@@ -39,6 +39,7 @@ export type WorkspaceRecord = {
 };
 
 export interface TaskRepository {
+  ping(): Promise<boolean>;
   create(input: CreateTaskInput): Promise<TaskRecord>;
   get(id: string): Promise<TaskRecord | null>;
   claimNextQueued(): Promise<TaskRecord | null>;
@@ -48,6 +49,7 @@ export interface TaskRepository {
   listEvents(taskId: string): Promise<TaskEventRecord[]>;
   createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
   workspaceExists(id: string): Promise<boolean>;
+  getOrCreateDefaultWorkspace(): Promise<WorkspaceRecord>;
 }
 
 const toTask = (row: Record<string, unknown>): TaskRecord => ({
@@ -73,6 +75,15 @@ class PostgresTaskRepository implements TaskRepository {
 
   constructor(sql: NeonQueryFunction<false, false>) {
     this.sql = sql;
+  }
+
+  async ping(): Promise<boolean> {
+    try {
+      const rows = await this.sql`SELECT 1 as alive`;
+      return rows.length > 0;
+    } catch {
+      return false;
+    }
   }
 
   async create(input: CreateTaskInput): Promise<TaskRecord> {
@@ -149,9 +160,15 @@ class PostgresTaskRepository implements TaskRepository {
     const rows = await this.sql`SELECT 1 FROM workspaces WHERE id = ${id}::uuid LIMIT 1`;
     return rows.length > 0;
   }
+
+  async getOrCreateDefaultWorkspace(): Promise<WorkspaceRecord> {
+    const existing = await this.sql`SELECT id, name, owner_id, created_at FROM workspaces ORDER BY created_at ASC LIMIT 1`;
+    if (existing.length > 0) return toWorkspace(existing[0] as Record<string, unknown>);
+    return this.createWorkspace({ email: 'default@nexaforge.ai', displayName: 'Default User', workspaceName: 'Default Workspace' });
+  }
 }
 
-export function createTaskRepository(databaseUrl = process.env.DATABASE_URL): TaskRepository | null {
+export function createTaskRepository(databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.NEON_DATABASE_URL): TaskRepository | null {
   if (!databaseUrl) return null;
   return new PostgresTaskRepository(neon(databaseUrl));
 }

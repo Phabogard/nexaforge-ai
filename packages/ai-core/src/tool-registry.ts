@@ -8,7 +8,7 @@ export interface ToolPolicy {
 }
 
 export class DefaultToolPolicy implements ToolPolicy {
-  decide({ task, tool, mode }): ApprovalDecision {
+  decide({ task, tool, mode }: { task: AgentTask; tool: Tool; mode: AgentMode }): ApprovalDecision {
     if (tool.risk === 'high') return 'require_approval';
     if (mode === 'computer-use' || mode === 'browser') return 'require_approval';
     if (task.budgetCents !== undefined && task.budgetCents <= 0) return 'deny';
