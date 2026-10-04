@@ -67,9 +67,7 @@ export default function Home() {
 
   async function ensureWorkspace() {
     if (workspace) return workspace;
-    const response = await fetch(`${apiUrl}/api/v1/workspaces/default`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }
-    });
+    const response = await fetch(`${apiUrl}/api/v1/workspaces/default`);
     if (!response.ok) throw new Error('Impossible de créer ou récupérer le workspace par défaut');
     const data = await response.json();
     window.localStorage.setItem('nexaforge.workspace', JSON.stringify(data.workspace));
