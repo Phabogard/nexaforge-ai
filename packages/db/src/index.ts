@@ -49,6 +49,8 @@ export interface PermissionRepository {
   createAgentSession(input: { userId: string; workspaceId?: string; agentType: string; grantedCapabilities?: string[]; metadata?: unknown; expiresAt?: string }): Promise<AgentSessionRecord>;
   getAgentSession(id: string): Promise<AgentSessionRecord | null>;
   consumeApproval(input: { approvalId: string; actionId: string; userId: string; workspaceId?: string; agentId?: string }): Promise<boolean>;
+  reserveAction(input: { actionId: string; userId: string; workspaceId?: string; agentId?: string }): Promise<{ reserved: boolean; existingStatus?: string }>;
+  updateActionStatus(input: { actionId: string; status: 'executed' | 'failed' | 'cancelled' }): Promise<boolean>;
   recordExecutedAction(input: { actionId: string; userId: string; workspaceId?: string; agentId?: string; status: string }): Promise<boolean>;
   isActionExecuted(actionId: string): Promise<boolean>;
 }
@@ -259,6 +261,24 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
     },
     async consumeApproval(i) {
       const r = await sql`INSERT INTO consumed_approvals(approval_id, action_id, user_id, workspace_id, agent_id) VALUES(${i.approvalId}, ${i.actionId}, ${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId ?? null}) ON CONFLICT(approval_id) DO NOTHING RETURNING id`;
+      return r.length > 0;
+    },
+    async reserveAction(i) {
+      const existing = await sql`SELECT status FROM executed_actions WHERE action_id=${i.actionId} LIMIT 1`;
+      if (existing.length > 0) {
+        const st = String(existing[0].status);
+        if (st === "pending" || st === "executed") {
+          return { reserved: false, existingStatus: st };
+        }
+        // If failed or cancelled, atomically re-reserve
+        const updated = await sql`UPDATE executed_actions SET status='pending', user_id=${i.userId}, workspace_id=${i.workspaceId ? i.workspaceId : null}::uuid, agent_id=${i.agentId ?? null}, updated_at=now() WHERE action_id=${i.actionId} AND status IN ('failed', 'cancelled') RETURNING id`;
+        return { reserved: updated.length > 0, existingStatus: st };
+      }
+      const inserted = await sql`INSERT INTO executed_actions(action_id, user_id, workspace_id, agent_id, status) VALUES(${i.actionId}, ${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId ?? null}, 'pending') ON CONFLICT(action_id) DO NOTHING RETURNING id`;
+      return { reserved: inserted.length > 0 };
+    },
+    async updateActionStatus(i) {
+      const r = await sql`UPDATE executed_actions SET status=${i.status}, updated_at=now() WHERE action_id=${i.actionId} RETURNING id`;
       return r.length > 0;
     },
     async recordExecutedAction(i) {

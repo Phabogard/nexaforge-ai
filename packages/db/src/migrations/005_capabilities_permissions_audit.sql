@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS executed_actions (
   user_id VARCHAR(128) NOT NULL,
   workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
   agent_id VARCHAR(128),
-  status VARCHAR(32) NOT NULL CHECK (status IN ('executed', 'failed', 'cancelled')),
+  status VARCHAR(32) NOT NULL CHECK (status IN ('pending', 'executed', 'failed', 'cancelled')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

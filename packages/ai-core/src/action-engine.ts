@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import type { Capability, RiskLevel } from '@nexaforge/shared';
 import type { PermissionRepository } from '@nexaforge/db';
 import { CapabilityEngine } from './capability-engine.js';
@@ -17,6 +18,7 @@ export interface ActionApproval {
   decision: 'approved' | 'rejected';
   scope?: Record<string, unknown>;
   expiresAt: number;
+  signature?: string;
 }
 
 export interface ActionPreview {
@@ -46,6 +48,31 @@ export interface ActionExecutionResult {
   preview?: ActionPreview;
   result?: unknown;
   error?: string;
+}
+
+export function computeApprovalCanonicalPayload(approval: Omit<ActionApproval, 'signature'>): string {
+  return [
+    approval.approvalId,
+    approval.userId,
+    approval.workspaceId ?? '',
+    approval.agentId ?? '',
+    approval.actionId,
+    approval.capability,
+    String(approval.timestamp),
+    approval.decision,
+    String(approval.expiresAt)
+  ].join('|');
+}
+
+export function signApproval(approval: Omit<ActionApproval, 'signature'>, secret = process.env.ACTION_APPROVAL_SECRET || 'dev-approval-secret-key-12345'): string {
+  const canonical = computeApprovalCanonicalPayload(approval);
+  return createHmac('sha256', secret).update(canonical).digest('hex');
+}
+
+export function verifyApprovalSignature(approval: ActionApproval, secret = process.env.ACTION_APPROVAL_SECRET || 'dev-approval-secret-key-12345'): boolean {
+  if (!approval.signature) return false;
+  const expectedSignature = signApproval(approval, secret);
+  return approval.signature === expectedSignature;
 }
 
 export class ActionEngine {
@@ -110,35 +137,71 @@ export class ActionEngine {
       };
     }
 
-    // 0.2 Action Replay Protection (DB + In-Memory)
-    let isAlreadyExecuted = this.inMemoryExecutedActions.has(req.actionId);
-    if (!isAlreadyExecuted && this.repository) {
-      isAlreadyExecuted = await this.repository.isActionExecuted(req.actionId);
-    }
-
-    if (isAlreadyExecuted) {
-      await this.auditLogger.log({
-        actor: ctx.agentId,
-        actorType: 'agent',
+    // 0.2 ATOMIC ACTION RESERVATION (PostgreSQL DB or In-Memory)
+    if (this.repository) {
+      const reservation = await this.repository.reserveAction({
+        actionId: req.actionId,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
-        agentId: ctx.agentId,
-        capability: req.capability,
-        tool: req.tool,
-        action: req.actionName,
-        status: 'denied',
-        reason: `ACTION_REPLAY_REJECTED: Action ${req.actionId} has already been executed`,
-        payload: req.params
+        agentId: ctx.agentId
       });
 
-      return {
-        success: false,
-        status: 'denied',
-        error: 'ACTION_REPLAY_REJECTED'
-      };
+      if (!reservation.reserved) {
+        await this.auditLogger.log({
+          actor: ctx.agentId,
+          actorType: 'agent',
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          agentId: ctx.agentId,
+          capability: req.capability,
+          tool: req.tool,
+          action: req.actionName,
+          status: 'denied',
+          reason: `ACTION_REPLAY_REJECTED: Action ${req.actionId} has already been reserved or executed in status ${reservation.existingStatus}`,
+          payload: req.params
+        });
+
+        return {
+          success: false,
+          status: 'denied',
+          error: 'ACTION_REPLAY_REJECTED'
+        };
+      }
+    } else {
+      if (this.inMemoryExecutedActions.has(req.actionId)) {
+        await this.auditLogger.log({
+          actor: ctx.agentId,
+          actorType: 'agent',
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          agentId: ctx.agentId,
+          capability: req.capability,
+          tool: req.tool,
+          action: req.actionName,
+          status: 'denied',
+          reason: `ACTION_REPLAY_REJECTED: Action ${req.actionId} has already been executed`,
+          payload: req.params
+        });
+
+        return {
+          success: false,
+          status: 'denied',
+          error: 'ACTION_REPLAY_REJECTED'
+        };
+      }
+      this.inMemoryExecutedActions.add(req.actionId);
     }
 
     const riskLevel = CapabilityEngine.getRiskLevel(req.capability);
+
+    // Helper to cleanup reservation on failure
+    const rollbackReservation = async (status: 'failed' | 'cancelled') => {
+      if (this.repository) {
+        await this.repository.updateActionStatus({ actionId: req.actionId, status });
+      } else {
+        this.inMemoryExecutedActions.delete(req.actionId);
+      }
+    };
 
     // 1. Check capability permission
     const permResult = await this.permissionEngine.checkPermission({
@@ -149,6 +212,7 @@ export class ActionEngine {
     });
 
     if (!permResult.granted) {
+      await rollbackReservation('failed');
       await this.auditLogger.log({
         actor: ctx.agentId,
         actorType: 'agent',
@@ -179,6 +243,7 @@ export class ActionEngine {
     });
 
     if (policyResult.decision === 'deny') {
+      await rollbackReservation('failed');
       await this.auditLogger.log({
         actor: ctx.agentId,
         actorType: 'agent',
@@ -200,12 +265,15 @@ export class ActionEngine {
       };
     }
 
-    // 3. Handle required approval with single-use consumption and scope verification
+    // 3. Handle required approval with HMAC signature verification and single-use consumption
     if (policyResult.decision === 'require_approval') {
       const approval = req.approval;
 
+      const isValidSignature = approval ? verifyApprovalSignature(approval) : false;
+
       const isValidApproval =
         approval &&
+        isValidSignature &&
         approval.decision === 'approved' &&
         approval.actionId === req.actionId &&
         approval.userId === ctx.userId &&
@@ -216,6 +284,8 @@ export class ActionEngine {
         !this.inMemoryConsumedApprovals.has(approval.approvalId);
 
       if (!isValidApproval) {
+        await rollbackReservation('failed');
+
         const preview: ActionPreview = {
           actionId: req.actionId,
           capability: req.capability,
@@ -236,7 +306,7 @@ export class ActionEngine {
           tool: req.tool,
           action: req.actionName,
           status: 'denied',
-          reason: 'Action requires valid unused matching user approval',
+          reason: 'Action requires valid signed unused user approval',
           payload: { preview }
         });
 
@@ -248,7 +318,7 @@ export class ActionEngine {
         };
       }
 
-      // Try consuming approval atomically in DB if repository available
+      // Consume approval atomically in DB if repository available
       if (this.repository) {
         const consumed = await this.repository.consumeApproval({
           approvalId: approval.approvalId,
@@ -259,6 +329,7 @@ export class ActionEngine {
         });
 
         if (!consumed) {
+          await rollbackReservation('failed');
           return {
             success: false,
             status: 'waiting_approval',
@@ -287,6 +358,7 @@ export class ActionEngine {
           payload: { params: req.params, riskLevel }
         });
       } catch (err) {
+        await rollbackReservation('failed');
         return {
           success: false,
           status: 'failed',
@@ -295,7 +367,7 @@ export class ActionEngine {
       }
     }
 
-    // 5. Execute tool action with AbortSignal, Timeout, and Persistent Replay tracking
+    // 5. Execute tool action with AbortSignal, Timeout, and Status Update
     const timeoutMs = req.timeoutMs ?? 30000;
     const timeoutController = new AbortController();
     let timeoutTimer: NodeJS.Timeout | undefined;
@@ -316,14 +388,10 @@ export class ActionEngine {
       clearTimeout(timeoutTimer);
       if (ctx.signal) ctx.signal.removeEventListener('abort', onAbort);
 
-      // Record successful execution
-      this.inMemoryExecutedActions.add(req.actionId);
+      // Record successful execution status
       if (this.repository) {
-        await this.repository.recordExecutedAction({
+        await this.repository.updateActionStatus({
           actionId: req.actionId,
-          userId: ctx.userId,
-          workspaceId: ctx.workspaceId,
-          agentId: ctx.agentId,
           status: 'executed'
         });
       }
@@ -353,6 +421,9 @@ export class ActionEngine {
 
       const isCancelled = ctx.signal?.aborted;
       const errorMsg = isCancelled ? 'ACTION_CANCELLED' : timeoutController.signal.aborted ? 'ACTION_TIMEOUT' : (err instanceof Error ? err.message : String(err));
+
+      const finalStatus = isCancelled ? 'cancelled' : 'failed';
+      await rollbackReservation(finalStatus);
 
       await this.auditLogger.log({
         actor: ctx.agentId,

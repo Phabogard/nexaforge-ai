@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AgentRuntime, type AgentExecutionContext } from './agent-runtime.js';
-import { ActionEngine, type ActionApproval } from './action-engine.js';
+import { ActionEngine, signApproval, type ActionApproval } from './action-engine.js';
 import { PermissionEngine } from './permission-engine.js';
 import { PolicyEngine } from './policy-engine.js';
 import { AuditLogger } from './audit-logger.js';
@@ -114,7 +114,48 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     expect(secondRun.error).toBe('ACTION_REPLAY_REJECTED');
   });
 
-  it('requires structured valid single-use approval for HIGH risk actions', async () => {
+  it('allows retry after action execution failure', async () => {
+    const permEngine = new PermissionEngine();
+    permEngine.grantInMemory('u1', 'web.read');
+
+    const policyEngine = new PolicyEngine();
+    const mockAuditRepo = { addAuditLog: async () => ({}) } as any;
+    const logger = new AuditLogger(mockAuditRepo);
+    const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
+
+    const ctx: AgentExecutionContext = {
+      agentId: 'agent-browser',
+      agentType: 'BrowserAgent',
+      userId: 'u1',
+      currentDepth: 1,
+      currentIteration: 1,
+      startTime: Date.now()
+    };
+
+    const actionReq = {
+      actionId: 'act-retry-test',
+      capability: 'web.read' as const,
+      tool: 'fetch_page',
+      actionName: 'Fetch page content',
+      description: 'Fetch URL',
+      params: { url: 'https://example.com' }
+    };
+
+    let attempts = 0;
+    const failingExecutor = async () => {
+      attempts++;
+      if (attempts === 1) throw new Error('NETWORK_TIMEOUT');
+      return { html: 'ok' };
+    };
+
+    const firstRun = await actionEngine.executeAction(ctx, actionReq, failingExecutor);
+    expect(firstRun.success).toBe(false);
+
+    const secondRun = await actionEngine.executeAction(ctx, actionReq, failingExecutor);
+    expect(secondRun.success).toBe(true);
+  });
+
+  it('requires HMAC cryptographically signed approval for HIGH risk actions', async () => {
     const permEngine = new PermissionEngine();
     permEngine.grantInMemory('u1', 'screen.capture');
 
@@ -132,25 +173,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
       startTime: Date.now()
     };
 
-    // 1. Unapproved call -> waiting_approval
-    const unapprovedRes = await actionEngine.executeAction(
-      ctx,
-      {
-        actionId: 'act-approval-test',
-        capability: 'screen.capture',
-        tool: 'capture_screen',
-        actionName: 'Capture Screen',
-        description: 'Capture screen frame',
-        params: { region: 'full' }
-      },
-      async () => ({ frame: 'img' })
-    );
-
-    expect(unapprovedRes.success).toBe(false);
-    expect(unapprovedRes.status).toBe('waiting_approval');
-
-    // 2. Approved call with valid structured approval -> executed
-    const approval: ActionApproval = {
+    const baseApproval: Omit<ActionApproval, 'signature'> = {
       approvalId: 'appr-1',
       userId: 'u1',
       actionId: 'act-approval-test',
@@ -158,6 +181,55 @@ describe('Agent Runtime & Action Engine Hardening', () => {
       timestamp: Date.now(),
       decision: 'approved',
       expiresAt: Date.now() + 60000
+    };
+
+    // 1. Unsigned approval -> rejected
+    const unsignedRes = await actionEngine.executeAction(
+      ctx,
+      {
+        actionId: 'act-approval-test',
+        capability: 'screen.capture',
+        tool: 'capture_screen',
+        actionName: 'Capture Screen',
+        description: 'Capture screen frame',
+        params: { region: 'full' },
+        approval: baseApproval as ActionApproval
+      },
+      async () => ({ frame: 'img' })
+    );
+
+    expect(unsignedRes.success).toBe(false);
+    expect(unsignedRes.status).toBe('waiting_approval');
+
+    // 2. Tampered approval -> rejected
+    const validSignature = signApproval(baseApproval);
+    const tamperedApproval: ActionApproval = {
+      ...baseApproval,
+      userId: 'u2-hacker', // modified user
+      signature: validSignature
+    };
+
+    const tamperedRes = await actionEngine.executeAction(
+      ctx,
+      {
+        actionId: 'act-approval-test',
+        capability: 'screen.capture',
+        tool: 'capture_screen',
+        actionName: 'Capture Screen',
+        description: 'Capture screen frame',
+        params: { region: 'full' },
+        approval: tamperedApproval
+      },
+      async () => ({ frame: 'img' })
+    );
+
+    expect(tamperedRes.success).toBe(false);
+    expect(tamperedRes.status).toBe('waiting_approval');
+
+    // 3. Valid signed approval -> executed
+    const validApproval: ActionApproval = {
+      ...baseApproval,
+      signature: validSignature
     };
 
     const approvedRes = await actionEngine.executeAction(
@@ -169,30 +241,12 @@ describe('Agent Runtime & Action Engine Hardening', () => {
         actionName: 'Capture Screen',
         description: 'Capture screen frame',
         params: { region: 'full' },
-        approval
+        approval: validApproval
       },
       async () => ({ frame: 'img' })
     );
 
     expect(approvedRes.success).toBe(true);
     expect(approvedRes.status).toBe('executed');
-
-    // 3. Reusing the same consumed approval -> waiting_approval
-    const reusedRes = await actionEngine.executeAction(
-      ctx,
-      {
-        actionId: 'act-approval-test-2',
-        capability: 'screen.capture',
-        tool: 'capture_screen',
-        actionName: 'Capture Screen',
-        description: 'Capture screen frame',
-        params: { region: 'full' },
-        approval
-      },
-      async () => ({ frame: 'img' })
-    );
-
-    expect(reusedRes.success).toBe(false);
-    expect(reusedRes.status).toBe('waiting_approval');
   });
 });

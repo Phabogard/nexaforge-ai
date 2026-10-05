@@ -30,7 +30,18 @@ describe('Permissions & Policy Engines Hardening', () => {
     expect(res.reason).toContain('revoked');
   });
 
-  it('enforces workspace isolation', async () => {
+  it('enforces strict user isolation', async () => {
+    const permEngine = new PermissionEngine();
+    permEngine.grantInMemory('user-A', 'web.read', 'ws-1');
+
+    const resA = await permEngine.checkPermission({ userId: 'user-A', workspaceId: 'ws-1', capability: 'web.read' });
+    expect(resA.granted).toBe(true);
+
+    const resB = await permEngine.checkPermission({ userId: 'user-B', workspaceId: 'ws-1', capability: 'web.read' });
+    expect(resB.granted).toBe(false);
+  });
+
+  it('enforces strict workspace isolation', async () => {
     const permEngine = new PermissionEngine();
     permEngine.grantInMemory('u1', 'web.read', 'ws-A');
 
@@ -41,7 +52,7 @@ describe('Permissions & Policy Engines Hardening', () => {
     expect(resB.granted).toBe(false);
   });
 
-  it('enforces agent isolation', async () => {
+  it('enforces strict agent isolation', async () => {
     const permEngine = new PermissionEngine();
     permEngine.grantInMemory('u1', 'web.read', 'ws-A', 'agent-1');
 
