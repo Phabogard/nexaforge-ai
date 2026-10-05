@@ -50,7 +50,8 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     permEngine.grantInMemory('u1', 'web.read');
 
     const policyEngine = new PolicyEngine();
-    const logger = new AuditLogger();
+    const mockAuditRepo = { addAuditLog: async () => ({}) } as any;
+    const logger = new AuditLogger(mockAuditRepo);
     const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
 
     const ctx: AgentExecutionContext = {
@@ -81,7 +82,8 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     permEngine.grantInMemory('u1', 'web.read');
 
     const policyEngine = new PolicyEngine();
-    const logger = new AuditLogger();
+    const mockAuditRepo = { addAuditLog: async () => ({}) } as any;
+    const logger = new AuditLogger(mockAuditRepo);
     const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
 
     const ctx: AgentExecutionContext = {
@@ -112,12 +114,13 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     expect(secondRun.error).toBe('ACTION_REPLAY_REJECTED');
   });
 
-  it('requires structured valid approval for HIGH risk actions', async () => {
+  it('requires structured valid single-use approval for HIGH risk actions', async () => {
     const permEngine = new PermissionEngine();
     permEngine.grantInMemory('u1', 'screen.capture');
 
     const policyEngine = new PolicyEngine();
-    const logger = new AuditLogger();
+    const mockAuditRepo = { addAuditLog: async () => ({}) } as any;
+    const logger = new AuditLogger(mockAuditRepo);
     const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
 
     const ctx: AgentExecutionContext = {
@@ -151,6 +154,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
       approvalId: 'appr-1',
       userId: 'u1',
       actionId: 'act-approval-test',
+      capability: 'screen.capture',
       timestamp: Date.now(),
       decision: 'approved',
       expiresAt: Date.now() + 60000
@@ -172,5 +176,23 @@ describe('Agent Runtime & Action Engine Hardening', () => {
 
     expect(approvedRes.success).toBe(true);
     expect(approvedRes.status).toBe('executed');
+
+    // 3. Reusing the same consumed approval -> waiting_approval
+    const reusedRes = await actionEngine.executeAction(
+      ctx,
+      {
+        actionId: 'act-approval-test-2',
+        capability: 'screen.capture',
+        tool: 'capture_screen',
+        actionName: 'Capture Screen',
+        description: 'Capture screen frame',
+        params: { region: 'full' },
+        approval
+      },
+      async () => ({ frame: 'img' })
+    );
+
+    expect(reusedRes.success).toBe(false);
+    expect(reusedRes.status).toBe('waiting_approval');
   });
 });

@@ -1,4 +1,5 @@
-import type { Capability, RiskLevel, PolicyDecision } from '@nexaforge/shared';
+import type { Capability, RiskLevel } from '@nexaforge/shared';
+import type { PermissionRepository } from '@nexaforge/db';
 import { CapabilityEngine } from './capability-engine.js';
 import { PermissionEngine } from './permission-engine.js';
 import { PolicyEngine } from './policy-engine.js';
@@ -8,7 +9,10 @@ import type { AgentExecutionContext } from './agent-runtime.js';
 export interface ActionApproval {
   approvalId: string;
   userId: string;
+  workspaceId?: string;
+  agentId?: string;
   actionId: string;
+  capability: Capability;
   timestamp: number;
   decision: 'approved' | 'rejected';
   scope?: Record<string, unknown>;
@@ -45,13 +49,14 @@ export interface ActionExecutionResult {
 }
 
 export class ActionEngine {
-  private executedActionIds: Map<string, number> = new Map();
-  private consumedApprovalIds: Set<string> = new Set();
+  private inMemoryExecutedActions: Set<string> = new Set();
+  private inMemoryConsumedApprovals: Set<string> = new Set();
 
   constructor(
     private permissionEngine: PermissionEngine,
     private policyEngine: PolicyEngine,
-    private auditLogger: AuditLogger
+    private auditLogger: AuditLogger,
+    private repository?: PermissionRepository | null
   ) {}
 
   async executeAction(
@@ -105,8 +110,13 @@ export class ActionEngine {
       };
     }
 
-    // 0.2 Action Replay Protection
-    if (this.executedActionIds.has(req.actionId)) {
+    // 0.2 Action Replay Protection (DB + In-Memory)
+    let isAlreadyExecuted = this.inMemoryExecutedActions.has(req.actionId);
+    if (!isAlreadyExecuted && this.repository) {
+      isAlreadyExecuted = await this.repository.isActionExecuted(req.actionId);
+    }
+
+    if (isAlreadyExecuted) {
       await this.auditLogger.log({
         actor: ctx.agentId,
         actorType: 'agent',
@@ -190,18 +200,22 @@ export class ActionEngine {
       };
     }
 
-    // 3. Handle required approval for HIGH / CRITICAL actions with structured verification and single-use consumption
+    // 3. Handle required approval with single-use consumption and scope verification
     if (policyResult.decision === 'require_approval') {
       const approval = req.approval;
 
-      if (
-        !approval ||
-        approval.decision !== 'approved' ||
-        approval.actionId !== req.actionId ||
-        approval.userId !== ctx.userId ||
-        Date.now() > approval.expiresAt ||
-        this.consumedApprovalIds.has(approval.approvalId)
-      ) {
+      const isValidApproval =
+        approval &&
+        approval.decision === 'approved' &&
+        approval.actionId === req.actionId &&
+        approval.userId === ctx.userId &&
+        (!approval.workspaceId || !ctx.workspaceId || approval.workspaceId === ctx.workspaceId) &&
+        (!approval.agentId || !ctx.agentId || approval.agentId === ctx.agentId) &&
+        (!approval.capability || approval.capability === req.capability) &&
+        Date.now() <= approval.expiresAt &&
+        !this.inMemoryConsumedApprovals.has(approval.approvalId);
+
+      if (!isValidApproval) {
         const preview: ActionPreview = {
           actionId: req.actionId,
           capability: req.capability,
@@ -222,7 +236,7 @@ export class ActionEngine {
           tool: req.tool,
           action: req.actionName,
           status: 'denied',
-          reason: 'Action requires valid unused user approval',
+          reason: 'Action requires valid unused matching user approval',
           payload: { preview }
         });
 
@@ -234,12 +248,29 @@ export class ActionEngine {
         };
       }
 
-      // Mark approval as consumed
-      this.consumedApprovalIds.add(approval.approvalId);
+      // Try consuming approval atomically in DB if repository available
+      if (this.repository) {
+        const consumed = await this.repository.consumeApproval({
+          approvalId: approval.approvalId,
+          actionId: req.actionId,
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          agentId: ctx.agentId
+        });
+
+        if (!consumed) {
+          return {
+            success: false,
+            status: 'waiting_approval',
+            error: 'APPROVAL_ALREADY_CONSUMED'
+          };
+        }
+      }
+
+      this.inMemoryConsumedApprovals.add(approval.approvalId);
     }
 
     // 4. MANDATORY PRE-EXECUTION AUDIT FOR HIGH / CRITICAL ACTIONS
-    // For HIGH/CRITICAL actions, pre-execution persistent audit is mandatory BEFORE tool execution.
     if (riskLevel === 'HIGH' || riskLevel === 'CRITICAL') {
       try {
         await this.auditLogger.log({
@@ -256,7 +287,6 @@ export class ActionEngine {
           payload: { params: req.params, riskLevel }
         });
       } catch (err) {
-        // FAIL-CLOSED: Do NOT execute action if pre-execution persistent audit fails
         return {
           success: false,
           status: 'failed',
@@ -265,12 +295,11 @@ export class ActionEngine {
       }
     }
 
-    // 5. Execute tool action with AbortSignal, Timeout, and Replay tracking
+    // 5. Execute tool action with AbortSignal, Timeout, and Persistent Replay tracking
     const timeoutMs = req.timeoutMs ?? 30000;
     const timeoutController = new AbortController();
     let timeoutTimer: NodeJS.Timeout | undefined;
 
-    // Combine ctx.signal and local timeoutController signal
     const onAbort = () => timeoutController.abort();
     if (ctx.signal) {
       if (ctx.signal.aborted) onAbort();
@@ -287,8 +316,17 @@ export class ActionEngine {
       clearTimeout(timeoutTimer);
       if (ctx.signal) ctx.signal.removeEventListener('abort', onAbort);
 
-      // Successfully executed -> record in executedActionIds
-      this.executedActionIds.set(req.actionId, Date.now());
+      // Record successful execution
+      this.inMemoryExecutedActions.add(req.actionId);
+      if (this.repository) {
+        await this.repository.recordExecutedAction({
+          actionId: req.actionId,
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          agentId: ctx.agentId,
+          status: 'executed'
+        });
+      }
 
       await this.auditLogger.log({
         actor: ctx.agentId,

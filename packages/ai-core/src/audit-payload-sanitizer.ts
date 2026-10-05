@@ -21,12 +21,6 @@ const SENSITIVE_KEYS = new Set([
   'dotenv'
 ]);
 
-const SENSITIVE_PATTERNS = [
-  /BEGIN\s+PRIVATE\s+KEY/i,
-  /Bearer\s+[A-Za-z0-9\-._~+/]+=*/i,
-  /([A-Z0-9_]{3,})\s*=\s*([^\s]+)/ // matches KEY=VAL .env patterns
-];
-
 const MAX_PAYLOAD_STRING_BYTES = 50000;
 
 export class AuditPayloadSanitizer {
@@ -37,7 +31,6 @@ export class AuditPayloadSanitizer {
       if (obj.includes('BEGIN PRIVATE KEY') || obj.toLowerCase().includes('bearer ')) {
         return '[REDACTED_SECRET_STRING]';
       }
-      // Check .env string pattern
       if (/^[A-Z0-9_]+=.+/i.test(obj.trim())) {
         return '[REDACTED_ENV_STRING]';
       }
@@ -74,7 +67,9 @@ export class AuditPayloadSanitizer {
     try {
       const jsonStr = JSON.stringify(sanitizedObj);
       if (jsonStr.length > MAX_PAYLOAD_STRING_BYTES) {
-        return { _warning: 'Payload truncated due to size limit', snippet: jsonStr.slice(0, 1000) + '...[TRUNCATED]' };
+        // Ensure snippet fallback is also sanitized
+        const safeSnippet = jsonStr.replace(/"(password|token|apiKey|secret|authorization)":"[^"]*"/gi, '"$1":"[REDACTED]"');
+        return { _warning: 'Payload truncated due to size limit', snippet: safeSnippet.slice(0, 1000) + '...[TRUNCATED]' };
       }
     } catch {
       return '[UNSERIALIZABLE_PAYLOAD]';

@@ -48,6 +48,9 @@ export interface PermissionRepository {
   listAuditLogs(filter: { userId?: string; workspaceId?: string; limit?: number }): Promise<AuditLogRecord[]>;
   createAgentSession(input: { userId: string; workspaceId?: string; agentType: string; grantedCapabilities?: string[]; metadata?: unknown; expiresAt?: string }): Promise<AgentSessionRecord>;
   getAgentSession(id: string): Promise<AgentSessionRecord | null>;
+  consumeApproval(input: { approvalId: string; actionId: string; userId: string; workspaceId?: string; agentId?: string }): Promise<boolean>;
+  recordExecutedAction(input: { actionId: string; userId: string; workspaceId?: string; agentId?: string; status: string }): Promise<boolean>;
+  isActionExecuted(actionId: string): Promise<boolean>;
 }
 
 export type WorkspaceRecord = {
@@ -226,7 +229,7 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
       return r.map(x => toPermission(x as Record<string, unknown>));
     },
     async revokePermission(userId, capability, workspaceId) {
-      const r = await sql`UPDATE permissions SET status=revoked, updated_at=now() WHERE user_id=${userId} AND capability=${capability} AND (workspace_id IS NULL OR workspace_id=${workspaceId ? workspaceId : null}::uuid) RETURNING id`;
+      const r = await sql`UPDATE permissions SET status='revoked', updated_at=now() WHERE user_id=${userId} AND capability=${capability} AND (workspace_id IS NULL OR workspace_id=${workspaceId ? workspaceId : null}::uuid) RETURNING id`;
       return r.length > 0;
     },
     async upsertPolicy(i) {
@@ -251,8 +254,20 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
       return toAgentSession(r[0] as Record<string, unknown>);
     },
     async getAgentSession(id) {
-      const r = await sql`SELECT * FROM agent_sessions WHERE id=${id}::uuid AND status=active AND (expires_at IS NULL OR expires_at > now())`;
+      const r = await sql`SELECT * FROM agent_sessions WHERE id=${id}::uuid AND status='active' AND (expires_at IS NULL OR expires_at > now())`;
       return r.length ? toAgentSession(r[0] as Record<string, unknown>) : null;
+    },
+    async consumeApproval(i) {
+      const r = await sql`INSERT INTO consumed_approvals(approval_id, action_id, user_id, workspace_id, agent_id) VALUES(${i.approvalId}, ${i.actionId}, ${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId ?? null}) ON CONFLICT(approval_id) DO NOTHING RETURNING id`;
+      return r.length > 0;
+    },
+    async recordExecutedAction(i) {
+      const r = await sql`INSERT INTO executed_actions(action_id, user_id, workspace_id, agent_id, status) VALUES(${i.actionId}, ${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId ?? null}, ${i.status}) ON CONFLICT(action_id) DO UPDATE SET status=EXCLUDED.status, updated_at=now() RETURNING id`;
+      return r.length > 0;
+    },
+    async isActionExecuted(actionId) {
+      const r = await sql`SELECT 1 FROM executed_actions WHERE action_id=${actionId} AND status='executed' LIMIT 1`;
+      return r.length > 0;
     }
   };
 }

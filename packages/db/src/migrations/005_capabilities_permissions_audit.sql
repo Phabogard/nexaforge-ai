@@ -74,3 +74,28 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_user ON agent_sessions(user_id, status);
+
+CREATE TABLE IF NOT EXISTS consumed_approvals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  approval_id VARCHAR(128) NOT NULL UNIQUE,
+  action_id VARCHAR(128) NOT NULL,
+  user_id VARCHAR(128) NOT NULL,
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
+  agent_id VARCHAR(128),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_consumed_approvals_user ON consumed_approvals(user_id, action_id);
+
+CREATE TABLE IF NOT EXISTS executed_actions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  action_id VARCHAR(128) NOT NULL UNIQUE,
+  user_id VARCHAR(128) NOT NULL,
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
+  agent_id VARCHAR(128),
+  status VARCHAR(32) NOT NULL CHECK (status IN ('executed', 'failed', 'cancelled')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_executed_actions_action_user ON executed_actions(action_id, user_id);
