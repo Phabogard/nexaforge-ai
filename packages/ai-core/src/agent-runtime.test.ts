@@ -5,6 +5,8 @@ import { PermissionEngine } from './permission-engine.js';
 import { PolicyEngine } from './policy-engine.js';
 import { AuditLogger } from './audit-logger.js';
 
+const TEST_SECRET = 'test-secret-key-1234567890';
+
 describe('Agent Runtime & Action Engine Hardening', () => {
   it('enforces all 6 execution limits and abort signal', () => {
     const ctx: AgentExecutionContext = {
@@ -52,7 +54,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     const policyEngine = new PolicyEngine();
     const mockAuditRepo = { addAuditLog: async () => ({}) } as any;
     const logger = new AuditLogger(mockAuditRepo);
-    const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
+    const actionEngine = new ActionEngine(permEngine, policyEngine, logger, null, TEST_SECRET);
 
     const ctx: AgentExecutionContext = {
       agentId: 'agent-browser',
@@ -84,7 +86,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     const policyEngine = new PolicyEngine();
     const mockAuditRepo = { addAuditLog: async () => ({}) } as any;
     const logger = new AuditLogger(mockAuditRepo);
-    const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
+    const actionEngine = new ActionEngine(permEngine, policyEngine, logger, null, TEST_SECRET);
 
     const ctx: AgentExecutionContext = {
       agentId: 'agent-browser',
@@ -121,7 +123,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     const policyEngine = new PolicyEngine();
     const mockAuditRepo = { addAuditLog: async () => ({}) } as any;
     const logger = new AuditLogger(mockAuditRepo);
-    const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
+    const actionEngine = new ActionEngine(permEngine, policyEngine, logger, null, TEST_SECRET);
 
     const ctx: AgentExecutionContext = {
       agentId: 'agent-browser',
@@ -155,14 +157,16 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     expect(secondRun.success).toBe(true);
   });
 
-  it('requires HMAC cryptographically signed approval for HIGH risk actions', async () => {
+  it('requires HMAC cryptographically signed approval for HIGH risk actions and fails if secret missing', async () => {
     const permEngine = new PermissionEngine();
     permEngine.grantInMemory('u1', 'screen.capture');
 
     const policyEngine = new PolicyEngine();
     const mockAuditRepo = { addAuditLog: async () => ({}) } as any;
     const logger = new AuditLogger(mockAuditRepo);
-    const actionEngine = new ActionEngine(permEngine, policyEngine, logger);
+
+    // Engine without secret -> fails closed
+    const noSecretEngine = new ActionEngine(permEngine, policyEngine, logger, null, undefined);
 
     const ctx: AgentExecutionContext = {
       agentId: 'agent-companion',
@@ -178,13 +182,13 @@ describe('Agent Runtime & Action Engine Hardening', () => {
       userId: 'u1',
       actionId: 'act-approval-test',
       capability: 'screen.capture',
+      scope: { region: 'full' },
       timestamp: Date.now(),
       decision: 'approved',
       expiresAt: Date.now() + 60000
     };
 
-    // 1. Unsigned approval -> rejected
-    const unsignedRes = await actionEngine.executeAction(
+    const noSecretRes = await noSecretEngine.executeAction(
       ctx,
       {
         actionId: 'act-approval-test',
@@ -193,20 +197,23 @@ describe('Agent Runtime & Action Engine Hardening', () => {
         actionName: 'Capture Screen',
         description: 'Capture screen frame',
         params: { region: 'full' },
-        approval: baseApproval as ActionApproval
+        approval: { ...baseApproval, signature: 'any' }
       },
       async () => ({ frame: 'img' })
     );
 
-    expect(unsignedRes.success).toBe(false);
-    expect(unsignedRes.status).toBe('waiting_approval');
+    expect(noSecretRes.success).toBe(false);
+    expect(noSecretRes.error).toBe('ACTION_APPROVAL_SECRET_REQUIRED');
 
-    // 2. Tampered approval -> rejected
-    const validSignature = signApproval(baseApproval);
-    const tamperedApproval: ActionApproval = {
+    // Engine with secret
+    const actionEngine = new ActionEngine(permEngine, policyEngine, logger, null, TEST_SECRET);
+
+    // Tampered scope
+    const validSig = signApproval(baseApproval, TEST_SECRET);
+    const tamperedScopeApproval: ActionApproval = {
       ...baseApproval,
-      userId: 'u2-hacker', // modified user
-      signature: validSignature
+      scope: { region: 'full', hacked: true },
+      signature: validSig
     };
 
     const tamperedRes = await actionEngine.executeAction(
@@ -218,7 +225,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
         actionName: 'Capture Screen',
         description: 'Capture screen frame',
         params: { region: 'full' },
-        approval: tamperedApproval
+        approval: tamperedScopeApproval
       },
       async () => ({ frame: 'img' })
     );
@@ -226,10 +233,10 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     expect(tamperedRes.success).toBe(false);
     expect(tamperedRes.status).toBe('waiting_approval');
 
-    // 3. Valid signed approval -> executed
+    // Valid approval
     const validApproval: ActionApproval = {
       ...baseApproval,
-      signature: validSignature
+      signature: validSig
     };
 
     const approvedRes = await actionEngine.executeAction(

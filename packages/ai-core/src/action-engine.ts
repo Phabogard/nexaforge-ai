@@ -50,7 +50,15 @@ export interface ActionExecutionResult {
   error?: string;
 }
 
+export function canonicalizeScope(scope?: Record<string, unknown>): string {
+  if (!scope || Object.keys(scope).length === 0) return '';
+  const sortedKeys = Object.keys(scope).sort();
+  const pairs = sortedKeys.map(k => `${k}:${JSON.stringify(scope[k])}`);
+  return pairs.join(';');
+}
+
 export function computeApprovalCanonicalPayload(approval: Omit<ActionApproval, 'signature'>): string {
+  const scopeStr = canonicalizeScope(approval.scope);
   return [
     approval.approvalId,
     approval.userId,
@@ -60,19 +68,28 @@ export function computeApprovalCanonicalPayload(approval: Omit<ActionApproval, '
     approval.capability,
     String(approval.timestamp),
     approval.decision,
+    scopeStr,
     String(approval.expiresAt)
   ].join('|');
 }
 
-export function signApproval(approval: Omit<ActionApproval, 'signature'>, secret = process.env.ACTION_APPROVAL_SECRET || 'dev-approval-secret-key-12345'): string {
+export function signApproval(approval: Omit<ActionApproval, 'signature'>, secret = process.env.ACTION_APPROVAL_SECRET): string {
+  if (!secret) {
+    throw new Error('ACTION_APPROVAL_SECRET_REQUIRED: process.env.ACTION_APPROVAL_SECRET or an explicit secret must be provided for HMAC approval signing.');
+  }
   const canonical = computeApprovalCanonicalPayload(approval);
   return createHmac('sha256', secret).update(canonical).digest('hex');
 }
 
-export function verifyApprovalSignature(approval: ActionApproval, secret = process.env.ACTION_APPROVAL_SECRET || 'dev-approval-secret-key-12345'): boolean {
+export function verifyApprovalSignature(approval: ActionApproval, secret = process.env.ACTION_APPROVAL_SECRET): boolean {
+  if (!secret) return false;
   if (!approval.signature) return false;
-  const expectedSignature = signApproval(approval, secret);
-  return approval.signature === expectedSignature;
+  try {
+    const expectedSignature = signApproval(approval, secret);
+    return approval.signature === expectedSignature;
+  } catch {
+    return false;
+  }
 }
 
 export class ActionEngine {
@@ -83,7 +100,8 @@ export class ActionEngine {
     private permissionEngine: PermissionEngine,
     private policyEngine: PolicyEngine,
     private auditLogger: AuditLogger,
-    private repository?: PermissionRepository | null
+    private repository?: PermissionRepository | null,
+    private approvalSecret = process.env.ACTION_APPROVAL_SECRET
   ) {}
 
   async executeAction(
@@ -269,7 +287,32 @@ export class ActionEngine {
     if (policyResult.decision === 'require_approval') {
       const approval = req.approval;
 
-      const isValidSignature = approval ? verifyApprovalSignature(approval) : false;
+      // Fail-closed if ACTION_APPROVAL_SECRET is missing or not configured
+      const secretToUse = this.approvalSecret || process.env.ACTION_APPROVAL_SECRET;
+      if (!secretToUse) {
+        await rollbackReservation('failed');
+        await this.auditLogger.log({
+          actor: ctx.agentId,
+          actorType: 'agent',
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          agentId: ctx.agentId,
+          capability: req.capability,
+          tool: req.tool,
+          action: req.actionName,
+          status: 'failed',
+          reason: 'ACTION_APPROVAL_SECRET_REQUIRED: Cannot verify approval signature without configured secret',
+          payload: req.params
+        });
+
+        return {
+          success: false,
+          status: 'failed',
+          error: 'ACTION_APPROVAL_SECRET_REQUIRED'
+        };
+      }
+
+      const isValidSignature = approval ? verifyApprovalSignature(approval, secretToUse) : false;
 
       const isValidApproval =
         approval &&
