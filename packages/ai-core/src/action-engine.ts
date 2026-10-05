@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Capability, RiskLevel } from '@nexaforge/shared';
 import type { PermissionRepository } from '@nexaforge/db';
 import { CapabilityEngine } from './capability-engine.js';
@@ -86,7 +86,14 @@ export function verifyApprovalSignature(approval: ActionApproval, secret = proce
   if (!approval.signature) return false;
   try {
     const expectedSignature = signApproval(approval, secret);
-    return approval.signature === expectedSignature;
+    const sigBuffer = Buffer.from(approval.signature, "hex");
+    const expectedBuffer = Buffer.from(expectedSignature, "hex");
+
+    if (sigBuffer.length !== expectedBuffer.length) {
+      return false;
+    }
+
+    return timingSafeEqual(sigBuffer, expectedBuffer);
   } catch {
     return false;
   }
@@ -215,7 +222,7 @@ export class ActionEngine {
     // Helper to cleanup reservation on failure
     const rollbackReservation = async (status: 'failed' | 'cancelled') => {
       if (this.repository) {
-        await this.repository.updateActionStatus({ actionId: req.actionId, status });
+        await this.repository.updateActionStatus({ actionId: req.actionId, userId: ctx.userId, workspaceId: ctx.workspaceId, agentId: ctx.agentId, status });
       } else {
         this.inMemoryExecutedActions.delete(req.actionId);
       }
@@ -435,6 +442,9 @@ export class ActionEngine {
       if (this.repository) {
         await this.repository.updateActionStatus({
           actionId: req.actionId,
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          agentId: ctx.agentId,
           status: 'executed'
         });
       }

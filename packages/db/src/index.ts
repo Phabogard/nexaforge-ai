@@ -50,7 +50,7 @@ export interface PermissionRepository {
   getAgentSession(id: string): Promise<AgentSessionRecord | null>;
   consumeApproval(input: { approvalId: string; actionId: string; userId: string; workspaceId?: string; agentId?: string }): Promise<boolean>;
   reserveAction(input: { actionId: string; userId: string; workspaceId?: string; agentId?: string }): Promise<{ reserved: boolean; existingStatus?: string }>;
-  updateActionStatus(input: { actionId: string; status: 'executed' | 'failed' | 'cancelled' }): Promise<boolean>;
+  updateActionStatus(input: { actionId: string; userId: string; workspaceId?: string; agentId?: string; status: 'executed' | 'failed' | 'cancelled' }): Promise<boolean>;
   recordExecutedAction(input: { actionId: string; userId: string; workspaceId?: string; agentId?: string; status: string }): Promise<boolean>;
   isActionExecuted(actionId: string): Promise<boolean>;
 }
@@ -264,21 +264,31 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
       return r.length > 0;
     },
     async reserveAction(i) {
-      const existing = await sql`SELECT status FROM executed_actions WHERE action_id=${i.actionId} LIMIT 1`;
+      const existing = await sql`SELECT status, user_id, workspace_id, agent_id FROM executed_actions WHERE action_id=${i.actionId} LIMIT 1`;
       if (existing.length > 0) {
-        const st = String(existing[0].status);
+        const row = existing[0];
+        const st = String(row.status);
+        const existingUser = String(row.user_id);
+        const existingWorkspace = row.workspace_id ? String(row.workspace_id) : null;
+        const existingAgent = row.agent_id ? String(row.agent_id) : null;
+
+        // Cross-scope collision check: Reject if user, workspace, or agent mismatch
+        if (existingUser !== i.userId || (existingWorkspace && i.workspaceId && existingWorkspace !== i.workspaceId) || (existingAgent && i.agentId && existingAgent !== i.agentId)) {
+          return { reserved: false, existingStatus: "SCOPE_MISMATCH" };
+        }
+
         if (st === "pending" || st === "executed") {
           return { reserved: false, existingStatus: st };
         }
-        // If failed or cancelled, atomically re-reserve
-        const updated = await sql`UPDATE executed_actions SET status='pending', user_id=${i.userId}, workspace_id=${i.workspaceId ? i.workspaceId : null}::uuid, agent_id=${i.agentId ?? null}, updated_at=now() WHERE action_id=${i.actionId} AND status IN ('failed', 'cancelled') RETURNING id`;
+        // If failed or cancelled, atomically re-reserve for the SAME scope
+        const updated = await sql`UPDATE executed_actions SET status='pending', updated_at=now() WHERE action_id=${i.actionId} AND user_id=${i.userId} AND (${i.workspaceId ? i.workspaceId : null}::uuid IS NULL OR workspace_id=${i.workspaceId ? i.workspaceId : null}::uuid) AND status IN ('failed', 'cancelled') RETURNING id`;
         return { reserved: updated.length > 0, existingStatus: st };
       }
       const inserted = await sql`INSERT INTO executed_actions(action_id, user_id, workspace_id, agent_id, status) VALUES(${i.actionId}, ${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId ?? null}, 'pending') ON CONFLICT(action_id) DO NOTHING RETURNING id`;
       return { reserved: inserted.length > 0 };
     },
     async updateActionStatus(i) {
-      const r = await sql`UPDATE executed_actions SET status=${i.status}, updated_at=now() WHERE action_id=${i.actionId} RETURNING id`;
+      const r = await sql`UPDATE executed_actions SET status=${i.status}, updated_at=now() WHERE action_id=${i.actionId} AND user_id=${i.userId} AND (${i.workspaceId ? i.workspaceId : null}::uuid IS NULL OR workspace_id=${i.workspaceId ? i.workspaceId : null}::uuid) RETURNING id`;
       return r.length > 0;
     },
     async recordExecutedAction(i) {

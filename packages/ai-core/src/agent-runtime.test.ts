@@ -257,3 +257,43 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     expect(approvedRes.status).toBe('executed');
   });
 });
+
+import { BoundedAgentExecutor, createToolRegistry } from './runtime.js';
+import type { AgentTask } from '@nexaforge/shared';
+
+describe('BoundedAgentExecutor Real Execution Limits Call-Sites', () => {
+  it('enforces execution limits during real BoundedAgentExecutor.run() execution', async () => {
+    const mockModel = {
+      invoke: async () => 'mock response'
+    } as any;
+
+    const mockAgentRuntime = {
+      plan: async () => [{ tool: 'time', params: {} }],
+      execute: async () => [{ tool: 'time', params: {}, result: '12:00', status: 'completed' as const }],
+      synthesize: async () => 'Answer synthesized'
+    } as any;
+
+    const registry = createToolRegistry([]);
+    const executor = new BoundedAgentExecutor(mockAgentRuntime, registry);
+
+    const task: AgentTask = {
+      id: 'task-limits-test',
+      workspaceId: 'ws-test',
+      prompt: 'What time is it?',
+      mode: 'auto',
+      status: 'running',
+      maxIterations: 12
+    };
+
+    // 1. Normal run succeeds
+    const res = await executor.run(task);
+    expect(res.status).toBe('completed');
+    expect(res.metrics?.toolCalls).toBe(1);
+    expect(res.metrics?.modelCalls).toBe(2);
+
+    // 2. Cancelled via AbortSignal -> throws AGENT_EXECUTION_CANCELLED
+    const controller = new AbortController();
+    controller.abort();
+    await expect(executor.run(task, { signal: controller.signal })).rejects.toThrow('AGENT_EXECUTION_CANCELLED');
+  });
+});
