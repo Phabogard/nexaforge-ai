@@ -13,7 +13,7 @@ describe('Permissions & Policy Engines Hardening', () => {
 
   it('rejects expired in-memory permission', async () => {
     const permEngine = new PermissionEngine();
-    permEngine.grantInMemory('u1', 'web.read', 'ws-1', -1000); // expired 1s ago
+    permEngine.grantInMemory('u1', 'web.read', 'ws-1', undefined, -1000); // expired 1s ago
 
     const res = await permEngine.checkPermission({ userId: 'u1', workspaceId: 'ws-1', capability: 'web.read' });
     expect(res.granted).toBe(false);
@@ -39,6 +39,17 @@ describe('Permissions & Policy Engines Hardening', () => {
 
     const resB = await permEngine.checkPermission({ userId: 'u1', workspaceId: 'ws-B', capability: 'web.read' });
     expect(resB.granted).toBe(false);
+  });
+
+  it('enforces agent isolation', async () => {
+    const permEngine = new PermissionEngine();
+    permEngine.grantInMemory('u1', 'web.read', 'ws-A', 'agent-1');
+
+    const resAgent1 = await permEngine.checkPermission({ userId: 'u1', workspaceId: 'ws-A', agentId: 'agent-1', capability: 'web.read' });
+    expect(resAgent1.granted).toBe(true);
+
+    const resAgent2 = await permEngine.checkPermission({ userId: 'u1', workspaceId: 'ws-A', agentId: 'agent-2', capability: 'web.read' });
+    expect(resAgent2.granted).toBe(false);
   });
 
   it('validates custom policy values and defaults invalid ones to HIGH risk', async () => {

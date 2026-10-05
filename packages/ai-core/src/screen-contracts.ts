@@ -4,6 +4,7 @@ export interface ScreenPermission {
   userId: string;
   deviceId?: string;
   scope: 'full' | 'window' | 'application' | 'region';
+  status: 'granted' | 'denied' | 'revoked' | 'expired';
   grantedAt: number;
   expiresAt: number;
 }

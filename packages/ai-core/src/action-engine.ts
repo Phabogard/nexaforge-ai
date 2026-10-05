@@ -33,6 +33,7 @@ export interface ActionExecutionRequest {
   description: string;
   params: Record<string, unknown>;
   approval?: ActionApproval;
+  timeoutMs?: number;
 }
 
 export interface ActionExecutionResult {
@@ -45,6 +46,7 @@ export interface ActionExecutionResult {
 
 export class ActionEngine {
   private executedActionIds: Map<string, number> = new Map();
+  private consumedApprovalIds: Set<string> = new Set();
 
   constructor(
     private permissionEngine: PermissionEngine,
@@ -55,10 +57,24 @@ export class ActionEngine {
   async executeAction(
     ctx: AgentExecutionContext,
     req: ActionExecutionRequest,
-    toolExecutor?: (params: Record<string, unknown>) => Promise<unknown>
+    toolExecutor?: (params: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<unknown>
   ): Promise<ActionExecutionResult> {
-    // Check timeout / cancellation signal early
+    // 0. Check cancellation early
     if (ctx.signal?.aborted) {
+      await this.auditLogger.log({
+        actor: ctx.agentId,
+        actorType: 'agent',
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        agentId: ctx.agentId,
+        capability: req.capability,
+        tool: req.tool,
+        action: req.actionName,
+        status: 'failed',
+        reason: 'ACTION_CANCELLED',
+        payload: req.params
+      });
+
       return {
         success: false,
         status: 'failed',
@@ -66,7 +82,7 @@ export class ActionEngine {
       };
     }
 
-    // 0. Fail-closed if no real toolExecutor provided
+    // 0.1 Fail-closed if no real toolExecutor provided
     if (!toolExecutor) {
       await this.auditLogger.log({
         actor: ctx.agentId,
@@ -89,7 +105,7 @@ export class ActionEngine {
       };
     }
 
-    // 0.1 Action Replay Protection
+    // 0.2 Action Replay Protection
     if (this.executedActionIds.has(req.actionId)) {
       await this.auditLogger.log({
         actor: ctx.agentId,
@@ -174,7 +190,7 @@ export class ActionEngine {
       };
     }
 
-    // 3. Handle required approval for HIGH / CRITICAL actions with structured verification
+    // 3. Handle required approval for HIGH / CRITICAL actions with structured verification and single-use consumption
     if (policyResult.decision === 'require_approval') {
       const approval = req.approval;
 
@@ -183,7 +199,8 @@ export class ActionEngine {
         approval.decision !== 'approved' ||
         approval.actionId !== req.actionId ||
         approval.userId !== ctx.userId ||
-        Date.now() > approval.expiresAt
+        Date.now() > approval.expiresAt ||
+        this.consumedApprovalIds.has(approval.approvalId)
       ) {
         const preview: ActionPreview = {
           actionId: req.actionId,
@@ -205,7 +222,7 @@ export class ActionEngine {
           tool: req.tool,
           action: req.actionName,
           status: 'denied',
-          reason: 'Action requires valid signed user approval',
+          reason: 'Action requires valid unused user approval',
           payload: { preview }
         });
 
@@ -216,13 +233,62 @@ export class ActionEngine {
           error: 'EXPLICIT_APPROVAL_REQUIRED'
         };
       }
+
+      // Mark approval as consumed
+      this.consumedApprovalIds.add(approval.approvalId);
     }
 
-    // 4. Execute tool action with cancellation support and replay tracking
-    try {
-      this.executedActionIds.set(req.actionId, Date.now());
+    // 4. MANDATORY PRE-EXECUTION AUDIT FOR HIGH / CRITICAL ACTIONS
+    // For HIGH/CRITICAL actions, pre-execution persistent audit is mandatory BEFORE tool execution.
+    if (riskLevel === 'HIGH' || riskLevel === 'CRITICAL') {
+      try {
+        await this.auditLogger.log({
+          actor: ctx.agentId,
+          actorType: 'agent',
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          agentId: ctx.agentId,
+          capability: req.capability,
+          tool: req.tool,
+          action: req.actionName,
+          status: 'allowed',
+          reason: `Pre-execution audit logging for ${riskLevel} action`,
+          payload: { params: req.params, riskLevel }
+        });
+      } catch (err) {
+        // FAIL-CLOSED: Do NOT execute action if pre-execution persistent audit fails
+        return {
+          success: false,
+          status: 'failed',
+          error: `MANDATORY_AUDIT_LOG_FAILED: Could not write pre-execution audit record for ${riskLevel} risk action ${req.capability}`
+        };
+      }
+    }
 
-      const output = await toolExecutor(req.params);
+    // 5. Execute tool action with AbortSignal, Timeout, and Replay tracking
+    const timeoutMs = req.timeoutMs ?? 30000;
+    const timeoutController = new AbortController();
+    let timeoutTimer: NodeJS.Timeout | undefined;
+
+    // Combine ctx.signal and local timeoutController signal
+    const onAbort = () => timeoutController.abort();
+    if (ctx.signal) {
+      if (ctx.signal.aborted) onAbort();
+      else ctx.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    timeoutTimer = setTimeout(() => {
+      timeoutController.abort();
+    }, timeoutMs);
+
+    try {
+      const output = await toolExecutor(req.params, { signal: timeoutController.signal });
+
+      clearTimeout(timeoutTimer);
+      if (ctx.signal) ctx.signal.removeEventListener('abort', onAbort);
+
+      // Successfully executed -> record in executedActionIds
+      this.executedActionIds.set(req.actionId, Date.now());
 
       await this.auditLogger.log({
         actor: ctx.agentId,
@@ -244,7 +310,11 @@ export class ActionEngine {
         result: output
       };
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      clearTimeout(timeoutTimer);
+      if (ctx.signal) ctx.signal.removeEventListener('abort', onAbort);
+
+      const isCancelled = ctx.signal?.aborted;
+      const errorMsg = isCancelled ? 'ACTION_CANCELLED' : timeoutController.signal.aborted ? 'ACTION_TIMEOUT' : (err instanceof Error ? err.message : String(err));
 
       await this.auditLogger.log({
         actor: ctx.agentId,

@@ -39,7 +39,7 @@ export type AgentSessionRecord = { id: string; userId: string; workspaceId?: str
 
 export interface PermissionRepository {
   grantPermission(input: { userId: string; workspaceId?: string; agentId?: string; capability: string; scope?: unknown; expiresAt?: string; grantedBy?: string }): Promise<PermissionRecord>;
-  getPermission(userId: string, capability: string, workspaceId?: string): Promise<PermissionRecord | null>;
+  getPermission(userId: string, capability: string, workspaceId?: string, agentId?: string): Promise<PermissionRecord | null>;
   listPermissions(userId: string, workspaceId?: string): Promise<PermissionRecord[]>;
   revokePermission(userId: string, capability: string, workspaceId?: string): Promise<boolean>;
   upsertPolicy(input: { workspaceId?: string; capability: string; riskLevel: string; policyAction: string }): Promise<SecurityPolicyRecord>;
@@ -217,8 +217,8 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
       const r = await sql`INSERT INTO permissions(user_id, workspace_id, agent_id, capability, scope, expires_at, granted_by) VALUES(${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId ?? null}, ${i.capability}, ${JSON.stringify(i.scope ?? {})}::jsonb, ${i.expiresAt ? new Date(i.expiresAt) : null}, ${i.grantedBy ?? null}) RETURNING *`;
       return toPermission(r[0] as Record<string, unknown>);
     },
-    async getPermission(userId, capability, workspaceId) {
-      const r = await sql`SELECT * FROM permissions WHERE user_id=${userId} AND capability=${capability} AND (workspace_id IS NULL OR workspace_id=${workspaceId ? workspaceId : null}::uuid) AND status=granted AND (expires_at IS NULL OR expires_at > now()) ORDER BY created_at DESC LIMIT 1`;
+    async getPermission(userId, capability, workspaceId, agentId) {
+      const r = await sql`SELECT * FROM permissions WHERE user_id=${userId} AND capability=${capability} AND (${workspaceId ? workspaceId : null}::uuid IS NULL OR workspace_id=${workspaceId ? workspaceId : null}::uuid) AND (${agentId ? agentId : null}::text IS NULL OR agent_id IS NULL OR agent_id=${agentId ? agentId : null}) AND status = 'granted' AND (expires_at IS NULL OR expires_at > now()) ORDER BY created_at DESC LIMIT 1`;
       return r.length ? toPermission(r[0] as Record<string, unknown>) : null;
     },
     async listPermissions(userId, workspaceId) {

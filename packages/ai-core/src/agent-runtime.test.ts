@@ -6,28 +6,43 @@ import { PolicyEngine } from './policy-engine.js';
 import { AuditLogger } from './audit-logger.js';
 
 describe('Agent Runtime & Action Engine Hardening', () => {
-  it('enforces execution limits and abort signal', () => {
+  it('enforces all 6 execution limits and abort signal', () => {
     const ctx: AgentExecutionContext = {
       agentId: 'a1',
       agentType: 'PlanningAgent',
       userId: 'u1',
       currentDepth: 1,
       currentIteration: 1,
+      currentStep: 1,
+      toolCallCount: 1,
+      modelCallCount: 1,
       startTime: Date.now()
     };
 
     expect(() => AgentRuntime.validateLimits(ctx)).not.toThrow();
 
-    const exceededIterationCtx = { ...ctx, currentIteration: 15 };
-    expect(() => AgentRuntime.validateLimits(exceededIterationCtx)).toThrow('MAX_AGENT_ITERATIONS_EXCEEDED');
-
-    const exceededDepthCtx = { ...ctx, currentDepth: 5 };
-    expect(() => AgentRuntime.validateLimits(exceededDepthCtx)).toThrow('MAX_AGENT_RECURSION_DEPTH_EXCEEDED');
-
+    // 1. Abort signal
     const abortController = new AbortController();
     abortController.abort();
-    const cancelledCtx = { ...ctx, signal: abortController.signal };
-    expect(() => AgentRuntime.validateLimits(cancelledCtx)).toThrow('AGENT_EXECUTION_CANCELLED');
+    expect(() => AgentRuntime.validateLimits({ ...ctx, signal: abortController.signal })).toThrow('AGENT_EXECUTION_CANCELLED');
+
+    // 2. Iterations
+    expect(() => AgentRuntime.validateLimits({ ...ctx, currentIteration: 15 })).toThrow('MAX_AGENT_ITERATIONS_EXCEEDED');
+
+    // 3. Steps
+    expect(() => AgentRuntime.validateLimits({ ...ctx, currentStep: 30 })).toThrow('MAX_AGENT_STEPS_EXCEEDED');
+
+    // 4. Tool calls
+    expect(() => AgentRuntime.validateLimits({ ...ctx, toolCallCount: 25 })).toThrow('MAX_AGENT_TOOL_CALLS_EXCEEDED');
+
+    // 5. Model calls
+    expect(() => AgentRuntime.validateLimits({ ...ctx, modelCallCount: 20 })).toThrow('MAX_AGENT_MODEL_CALLS_EXCEEDED');
+
+    // 6. Recursion depth
+    expect(() => AgentRuntime.validateLimits({ ...ctx, currentDepth: 5 })).toThrow('MAX_AGENT_RECURSION_DEPTH_EXCEEDED');
+
+    // 7. Duration
+    expect(() => AgentRuntime.validateLimits({ ...ctx, startTime: Date.now() - 400000 })).toThrow('MAX_AGENT_DURATION_EXCEEDED');
   });
 
   it('fails closed when toolExecutor is missing', async () => {
