@@ -159,7 +159,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
 
   it('requires HMAC cryptographically signed approval for HIGH risk actions and fails if secret missing', async () => {
     const permEngine = new PermissionEngine();
-    permEngine.grantInMemory('u1', 'screen.capture');
+    permEngine.grantInMemory('u1', 'screen.capture', 'ws-approval', 'agent-companion');
 
     const policyEngine = new PolicyEngine();
     const actionStates = new Map<string, 'pending' | 'executed' | 'failed' | 'cancelled'>();
