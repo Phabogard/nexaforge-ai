@@ -1,4 +1,4 @@
-import type { Capability, RiskLevel } from '@nexaforge/shared';
+import type { Capability, CapabilityGrant, RiskLevel } from '@nexaforge/shared';
 
 const CAPABILITY_RISKS: Record<Capability, RiskLevel> = {
   'web.read': 'LOW',
@@ -29,12 +29,12 @@ export class CapabilityEngine {
     return CAPABILITY_RISKS[capability] ?? 'HIGH';
   }
 
-  static isCapabilityAllowedInScope(requiredCap: Capability, grantedCaps: Capability[]): boolean {
+  static isCapabilityAllowedInScope(requiredCap: Capability, grantedCaps: CapabilityGrant[]): boolean {
     if (grantedCaps.includes(requiredCap)) return true;
 
     // Support wildcard matching if scoped (e.g. 'web.*' covers 'web.read')
     const prefix = requiredCap.split('.')[0];
-    if (grantedCaps.includes(`${prefix}.*` as Capability)) return true;
+    if (grantedCaps.includes(`${prefix}.*` as CapabilityGrant)) return true;
 
     return false;
   }
