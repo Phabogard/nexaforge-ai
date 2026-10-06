@@ -73,7 +73,7 @@ export class TaskWorker {
       await this.store.addEvent(task.id, 'task.running', {});
       if (controller.signal.aborted) throw new Error('TASK_CANCELLED');
 
-      const result = await executor.run(toAgentTask({ ...task, status: 'running' }));
+      const result = await executor.run(toAgentTask({ ...task, status: 'running' }), { signal: controller.signal });
       if (controller.signal.aborted) throw new Error('TASK_CANCELLED');
 
       const status = result.status;
