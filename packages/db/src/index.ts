@@ -264,7 +264,18 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
       return r.length > 0;
     },
     async reserveAction(i) {
-      const existing = await sql`SELECT status, user_id, workspace_id, agent_id FROM executed_actions WHERE action_id=${i.actionId} LIMIT 1`;
+      // Lock an existing action row so retries after failure cannot both
+      // transition the same action back to pending concurrently.
+      const existing = await sql`
+        SELECT status, user_id, workspace_id, agent_id
+        FROM executed_actions
+        WHERE action_id=${i.actionId}
+        FOR UPDATE
+      `;
+
+      const requestedWorkspace = i.workspaceId ?? null;
+      const requestedAgent = i.agentId ?? null;
+
       if (existing.length > 0) {
         const row = existing[0];
         const st = String(row.status);
@@ -272,27 +283,69 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
         const existingWorkspace = row.workspace_id ? String(row.workspace_id) : null;
         const existingAgent = row.agent_id ? String(row.agent_id) : null;
 
-        // Cross-scope collision check: Reject if user, workspace, or agent mismatch
-        if (existingUser !== i.userId || (existingWorkspace && i.workspaceId && existingWorkspace !== i.workspaceId) || (existingAgent && i.agentId && existingAgent !== i.agentId)) {
-          return { reserved: false, existingStatus: "SCOPE_MISMATCH" };
+        // actionId is permanently bound to its original execution scope.
+        if (
+          existingUser !== i.userId ||
+          existingWorkspace !== requestedWorkspace ||
+          existingAgent !== requestedAgent
+        ) {
+          return { reserved: false, existingStatus: 'SCOPE_MISMATCH' };
         }
 
-        if (st === "pending" || st === "executed") {
+        if (st === 'pending' || st === 'executed') {
           return { reserved: false, existingStatus: st };
         }
-        // If failed or cancelled, atomically re-reserve for the SAME scope
-        const updated = await sql`UPDATE executed_actions SET status='pending', updated_at=now() WHERE action_id=${i.actionId} AND user_id=${i.userId} AND (${i.workspaceId ? i.workspaceId : null}::uuid IS NULL OR workspace_id=${i.workspaceId ? i.workspaceId : null}::uuid) AND status IN ('failed', 'cancelled') RETURNING id`;
-        return { reserved: updated.length > 0, existingStatus: st };
+
+        if (st === 'failed' || st === 'cancelled') {
+          const updated = await sql`
+            UPDATE executed_actions
+            SET status='pending', updated_at=now()
+            WHERE action_id=${i.actionId}
+              AND user_id=${i.userId}
+              AND workspace_id IS NOT DISTINCT FROM ${requestedWorkspace}::uuid
+              AND agent_id IS NOT DISTINCT FROM ${requestedAgent}
+              AND status IN ('failed', 'cancelled')
+            RETURNING id
+          `;
+          return { reserved: updated.length > 0, existingStatus: st };
+        }
+
+        return { reserved: false, existingStatus: st };
       }
-      const inserted = await sql`INSERT INTO executed_actions(action_id, user_id, workspace_id, agent_id, status) VALUES(${i.actionId}, ${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId ?? null}, 'pending') ON CONFLICT(action_id) DO NOTHING RETURNING id`;
+
+      // For a new actionId, the UNIQUE(action_id) constraint remains the
+      // final arbiter if two transactions race to insert the same action.
+      const inserted = await sql`
+        INSERT INTO executed_actions(action_id, user_id, workspace_id, agent_id, status)
+        VALUES(${i.actionId}, ${i.userId}, ${requestedWorkspace}::uuid, ${requestedAgent}, 'pending')
+        ON CONFLICT(action_id) DO NOTHING
+        RETURNING id
+      `;
       return { reserved: inserted.length > 0 };
     },
     async updateActionStatus(i) {
-      const r = await sql`UPDATE executed_actions SET status=${i.status}, updated_at=now() WHERE action_id=${i.actionId} AND user_id=${i.userId} AND (${i.workspaceId ? i.workspaceId : null}::uuid IS NULL OR workspace_id=${i.workspaceId ? i.workspaceId : null}::uuid) RETURNING id`;
+      const r = await sql`
+        UPDATE executed_actions
+        SET status=${i.status}, updated_at=now()
+        WHERE action_id=${i.actionId}
+          AND user_id=${i.userId}
+          AND workspace_id IS NOT DISTINCT FROM ${i.workspaceId ?? null}::uuid
+          AND agent_id IS NOT DISTINCT FROM ${i.agentId ?? null}
+        RETURNING id
+      `;
       return r.length > 0;
     },
     async recordExecutedAction(i) {
-      const r = await sql`INSERT INTO executed_actions(action_id, user_id, workspace_id, agent_id, status) VALUES(${i.actionId}, ${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId ?? null}, ${i.status}) ON CONFLICT(action_id) DO UPDATE SET status=EXCLUDED.status, updated_at=now() RETURNING id`;
+      const r = await sql`
+        INSERT INTO executed_actions(action_id, user_id, workspace_id, agent_id, status)
+        VALUES(${i.actionId}, ${i.userId}, ${i.workspaceId ?? null}::uuid, ${i.agentId ?? null}, ${i.status})
+        ON CONFLICT(action_id) DO UPDATE
+        SET status=EXCLUDED.status, updated_at=now()
+        WHERE executed_actions.user_id = EXCLUDED.user_id
+          AND executed_actions.workspace_id IS NOT DISTINCT FROM EXCLUDED.workspace_id
+          AND executed_actions.agent_id IS NOT DISTINCT FROM EXCLUDED.agent_id
+        RETURNING id
+      `;
       return r.length > 0;
     },
     async isActionExecuted(actionId) {
