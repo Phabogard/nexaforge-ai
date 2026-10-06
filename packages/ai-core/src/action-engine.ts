@@ -290,6 +290,23 @@ export class ActionEngine {
       };
     }
 
+    // High/critical actions and all approval-gated actions require durable
+    // persistence. The in-memory fallback is intentionally not sufficient for
+    // security-sensitive execution because a process restart would erase replay state.
+    if (
+      (riskLevel === 'HIGH' ||
+        riskLevel === 'CRITICAL' ||
+        policyResult.decision === 'require_approval') &&
+      !this.repository
+    ) {
+      await rollbackReservation('failed');
+      return {
+        success: false,
+        status: 'failed',
+        error: 'PERSISTENT_ACTION_SECURITY_REPOSITORY_REQUIRED'
+      };
+    }
+
     // 3. Handle required approval with HMAC signature verification and single-use consumption
     if (policyResult.decision === 'require_approval') {
       const approval = req.approval;
