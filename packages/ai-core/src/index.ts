@@ -7,7 +7,7 @@ export interface PlanStep{id:string;objective:string;mode:AgentMode;tool?:string
 export interface AgentRuntime{plan(task:AgentTask):Promise<PlanStep[]>;execute(task:AgentTask,plan:PlanStep[],signal?:AbortSignal):Promise<ToolCall[]>;synthesize(task:AgentTask,calls:ToolCall[]):Promise<string>;}
 const APPROVAL_MODES=new Set<AgentMode>(['computer-use','browser']);const HIGH_RISK_TOOLS=new Set(['shell','filesystem-write','financial-action','account-action']);const VALID_MODES=new Set<AgentMode>(['auto','research','fact-check','deep-research','vision','browser','computer-use','trading','chart','probability','simulation','documents','code','news','monitoring','study','custom']);
 export function requiresApproval(mode:AgentMode,tool?:Tool):boolean{return APPROVAL_MODES.has(mode)||tool?.risk==='high'||!!tool&&HIGH_RISK_TOOLS.has(tool.name);}
-function parsePlan(raw:string,task:AgentTask,tools:Tool[]):PlanStep[]{let parsed:unknown;try{parsed=JSON.parse(raw);}catch{throw new Error('INVALID_PLAN_JSON');}if(!Array.isArray(parsed)||parsed.length===0||parsed.length>Math.min(task.maxIterations||12,50))throw new Error('INVALID_PLAN_SHAPE');const allowedTools=new Set(tools.map(tool=>tool.name));return parsed.map((item,index):PlanStep=>{if(!item||typeof item!=='object')throw new Error('INVALID_PLAN_STEP');const value=item as Record<string,unknown>;const objective=typeof value.objective==='string'?value.objective.trim():'';const tool=typeof value.tool==='string'?value.tool:undefined;const mode=typeof value.mode==='string'&&VALID_MODES.has(value.mode as AgentMode)?value.mode as AgentMode:task.mode;if(!objective)throw new Error('INVALID_PLAN_OBJECTIVE');if(tool&&!allowedTools.has(tool))throw new Error(`UNKNOWN_PLAN_TOOL:${tool}`);const candidate=tool?tools.find(entry=>entry.name===tool):undefined;return{id:typeof value.id==='string'&&value.id?value.id:`step-${index+1}`,objective,mode,tool,input:value.input,requiresApproval:value.requiresApproval===true||requiresApproval(mode,candidate)};});}
+function parsePlan(raw:string,task:AgentTask,tools:Tool[]):PlanStep[]{let parsed:unknown;try{parsed=JSON.parse(raw);}catch{throw new Error('INVALID_PLAN_JSON');}if(!Array.isArray(parsed)||parsed.length===0||parsed.length>Math.min(task.maxIterations||DEFAULT_EXECUTION_LIMITS.maxIterations,DEFAULT_EXECUTION_LIMITS.maxIterations))throw new Error('INVALID_PLAN_SHAPE');const allowedTools=new Set(tools.map(tool=>tool.name));return parsed.map((item,index):PlanStep=>{if(!item||typeof item!=='object')throw new Error('INVALID_PLAN_STEP');const value=item as Record<string,unknown>;const objective=typeof value.objective==='string'?value.objective.trim():'';const tool=typeof value.tool==='string'?value.tool:undefined;const mode=typeof value.mode==='string'&&VALID_MODES.has(value.mode as AgentMode)?value.mode as AgentMode:task.mode;if(!objective)throw new Error('INVALID_PLAN_OBJECTIVE');if(tool&&!allowedTools.has(tool))throw new Error(`UNKNOWN_PLAN_TOOL:${tool}`);const candidate=tool?tools.find(entry=>entry.name===tool):undefined;return{id:typeof value.id==='string'&&value.id?value.id:`step-${index+1}`,objective,mode,tool,input:value.input,requiresApproval:value.requiresApproval===true||requiresApproval(mode,candidate)};});}
 export function createSupervisor(tools: Tool[], model: ModelProvider): AgentRuntime {
   return {
     async plan(task) {
@@ -50,12 +50,6 @@ export function createSupervisor(tools: Tool[], model: ModelProvider): AgentRunt
         }
         if (calls.length >= DEFAULT_EXECUTION_LIMITS.maxSteps) {
           throw new Error('MAX_AGENT_STEPS_EXCEEDED');
-        }
-
-        const elapsed = Date.now();
-        if (elapsed > 0) {
-          // Duration is enforced by the BoundedAgentExecutor's signal as well;
-          // this point makes the supervisor fail closed between tool steps.
         }
 
         if (!step.tool) continue;
