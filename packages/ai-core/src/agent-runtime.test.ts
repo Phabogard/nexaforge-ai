@@ -167,11 +167,12 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     const mockAuditRepo = {
       addAuditLog: async () => ({}),
       reserveAction: async ({ actionId }: { actionId: string }) => {
-        if (actionStates.has(actionId)) {
-          return { reserved: false, existingStatus: actionStates.get(actionId) };
+        const existing = actionStates.get(actionId);
+        if (existing === 'pending' || existing === 'executed') {
+          return { reserved: false, existingStatus: existing };
         }
         actionStates.set(actionId, 'pending');
-        return { reserved: true };
+        return { reserved: true, existingStatus: existing };
       },
       updateActionStatus: async ({ actionId, status }: { actionId: string; status: 'executed' | 'failed' | 'cancelled' }) => {
         if (!actionStates.has(actionId)) return false;
@@ -311,7 +312,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
 describe('Approval durability ordering', () => {
   it('does not consume an approval when mandatory pre-execution audit fails', async () => {
     const permEngine = new PermissionEngine();
-    permEngine.grantInMemory('u1', 'screen.capture');
+    permEngine.grantInMemory('u1', 'screen.capture', 'ws-approval', 'agent-companion');
     const policyEngine = new PolicyEngine();
     let consumed = false;
     let status: string = 'pending';
