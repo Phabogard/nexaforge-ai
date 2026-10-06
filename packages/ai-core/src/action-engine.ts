@@ -368,29 +368,6 @@ export class ActionEngine {
         };
       }
 
-      // Consume approval atomically in DB if repository available
-      if (this.repository) {
-        const consumed = await this.repository.consumeApproval({
-          approvalId: approval.approvalId,
-          actionId: req.actionId,
-          userId: ctx.userId,
-          workspaceId: ctx.workspaceId,
-          agentId: ctx.agentId
-        });
-
-        if (!consumed) {
-          await rollbackReservation('failed');
-          return {
-            success: false,
-            status: 'waiting_approval',
-            error: 'APPROVAL_ALREADY_CONSUMED'
-          };
-        }
-      }
-
-      this.inMemoryConsumedApprovals.add(approval.approvalId);
-    }
-
     // 4. MANDATORY PRE-EXECUTION AUDIT FOR HIGH / CRITICAL ACTIONS
     if (riskLevel === 'HIGH' || riskLevel === 'CRITICAL') {
       try {
@@ -415,6 +392,31 @@ export class ActionEngine {
           error: `MANDATORY_AUDIT_LOG_FAILED: Could not write pre-execution audit record for ${riskLevel} risk action ${req.capability}`
         };
       }
+    }
+
+    // Consume approval only after the mandatory pre-execution audit succeeds.
+    // A transient audit outage must not burn a valid user approval when no tool ran.
+    if (policyResult.decision === 'require_approval' && req.approval) {
+      if (this.repository) {
+        const consumed = await this.repository.consumeApproval({
+          approvalId: req.approval.approvalId,
+          actionId: req.actionId,
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          agentId: ctx.agentId
+        });
+
+        if (!consumed) {
+          await rollbackReservation('failed');
+          return {
+            success: false,
+            status: 'waiting_approval',
+            error: 'APPROVAL_ALREADY_CONSUMED'
+          };
+        }
+      }
+
+      this.inMemoryConsumedApprovals.add(req.approval.approvalId);
     }
 
     // 5. Execute tool action with AbortSignal, Timeout, and Status Update
