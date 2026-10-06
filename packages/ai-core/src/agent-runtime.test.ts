@@ -172,6 +172,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
       agentId: 'agent-companion',
       agentType: 'PersonalAssistantAgent',
       userId: 'u1',
+      workspaceId: 'ws-approval',
       currentDepth: 1,
       currentIteration: 1,
       startTime: Date.now()
@@ -180,6 +181,8 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     const baseApproval: Omit<ActionApproval, 'signature'> = {
       approvalId: 'appr-1',
       userId: 'u1',
+      workspaceId: 'ws-approval',
+      agentId: 'agent-companion',
       actionId: 'act-approval-test',
       capability: 'screen.capture',
       scope: { region: 'full' },
@@ -232,6 +235,32 @@ describe('Agent Runtime & Action Engine Hardening', () => {
 
     expect(tamperedRes.success).toBe(false);
     expect(tamperedRes.status).toBe('waiting_approval');
+
+    // A correctly signed approval from another agent scope must not be accepted.
+    const wrongAgentApprovalBase: Omit<ActionApproval, 'signature'> = {
+      ...baseApproval,
+      approvalId: 'appr-wrong-agent',
+      agentId: 'agent-other'
+    };
+    const wrongAgentApproval: ActionApproval = {
+      ...wrongAgentApprovalBase,
+      signature: signApproval(wrongAgentApprovalBase, TEST_SECRET)
+    };
+    const wrongAgentRes = await actionEngine.executeAction(
+      ctx,
+      {
+        actionId: 'act-approval-test',
+        capability: 'screen.capture',
+        tool: 'capture_screen',
+        actionName: 'Capture Screen',
+        description: 'Capture screen frame',
+        params: { region: 'full' },
+        approval: wrongAgentApproval
+      },
+      async () => ({ frame: 'img' })
+    );
+    expect(wrongAgentRes.success).toBe(false);
+    expect(wrongAgentRes.status).toBe('waiting_approval');
 
     // Valid approval
     const validApproval: ActionApproval = {
