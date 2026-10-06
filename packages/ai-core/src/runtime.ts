@@ -1,6 +1,10 @@
 import type { AgentTask, ToolCall } from '@nexaforge/shared';
 import type { AgentRuntime, Tool } from './index.js';
-import { AgentRuntime as RuntimeValidator, type AgentExecutionContext } from './agent-runtime.js';
+import {
+  AgentRuntime as RuntimeValidator,
+  DEFAULT_EXECUTION_LIMITS,
+  type AgentExecutionContext
+} from './agent-runtime.js';
 import { ToolRegistry } from './tool-registry.js';
 
 export interface RuntimeResult {
@@ -21,7 +25,18 @@ export class BoundedAgentExecutor {
 
   async run(task: AgentTask, options?: { signal?: AbortSignal }): Promise<RuntimeResult> {
     const startTime = Date.now();
-    const max = Math.max(1, Math.min(task.maxIterations || 12, 50));
+    const max = Math.max(1, Math.min(task.maxIterations || DEFAULT_EXECUTION_LIMITS.maxIterations, DEFAULT_EXECUTION_LIMITS.maxIterations));
+
+    const durationController = new AbortController();
+    const onExternalAbort = () => durationController.abort();
+    if (options?.signal) {
+      if (options.signal.aborted) durationController.abort();
+      else options.signal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+    const durationTimer = setTimeout(
+      () => durationController.abort(),
+      DEFAULT_EXECUTION_LIMITS.maxDurationMs
+    );
 
     const ctx: AgentExecutionContext = {
       agentId: 'bounded-executor',
@@ -35,7 +50,7 @@ export class BoundedAgentExecutor {
       toolCallCount: 0,
       modelCallCount: 0,
       startTime,
-      signal: options?.signal
+      signal: durationController.signal
     };
 
     // 1. Initial validation
@@ -53,7 +68,7 @@ export class BoundedAgentExecutor {
     ctx.currentIteration = 1;
     RuntimeValidator.validateLimits(ctx, { maxIterations: max });
 
-    const calls = await this.runtime.execute(task, plan);
+    const calls = await this.runtime.execute(task, plan, durationController.signal);
 
     // Count executed tool calls
     ctx.toolCallCount = (ctx.toolCallCount ?? 0) + calls.length;
@@ -63,6 +78,8 @@ export class BoundedAgentExecutor {
     const hasFailure = calls.some(call => call.status === 'failed' || call.status === 'blocked');
 
     if (hasPendingApproval) {
+      clearTimeout(durationTimer);
+      if (options?.signal) options.signal.removeEventListener('abort', onExternalAbort);
       return {
         calls,
         status: 'waiting',
@@ -77,6 +94,8 @@ export class BoundedAgentExecutor {
     }
 
     if (hasFailure) {
+      clearTimeout(durationTimer);
+      if (options?.signal) options.signal.removeEventListener('abort', onExternalAbort);
       return {
         calls,
         status: 'failed',
@@ -97,6 +116,8 @@ export class BoundedAgentExecutor {
 
     const answer = await this.runtime.synthesize(task, calls);
 
+    clearTimeout(durationTimer);
+    if (options?.signal) options.signal.removeEventListener('abort', onExternalAbort);
     return {
       calls,
       answer,
