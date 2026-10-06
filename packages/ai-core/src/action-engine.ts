@@ -327,9 +327,9 @@ export class ActionEngine {
         approval.decision === 'approved' &&
         approval.actionId === req.actionId &&
         approval.userId === ctx.userId &&
-        (!approval.workspaceId || !ctx.workspaceId || approval.workspaceId === ctx.workspaceId) &&
-        (!approval.agentId || !ctx.agentId || approval.agentId === ctx.agentId) &&
-        (!approval.capability || approval.capability === req.capability) &&
+        (approval.workspaceId ?? null) === (ctx.workspaceId ?? null) &&
+        (approval.agentId ?? null) === (ctx.agentId ?? null) &&
+        approval.capability === req.capability &&
         Date.now() <= approval.expiresAt &&
         !this.inMemoryConsumedApprovals.has(approval.approvalId);
 
