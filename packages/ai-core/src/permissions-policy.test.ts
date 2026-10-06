@@ -11,6 +11,11 @@ describe('Permissions & Policy Engines Hardening', () => {
     expect(CapabilityEngine.getRiskLevel('device.camera.use')).toBe('CRITICAL');
   });
 
+  it('supports explicit namespace wildcard capability grants', () => {
+    expect(CapabilityEngine.isCapabilityAllowedInScope('web.read', ['web.*'])).toBe(true);
+    expect(CapabilityEngine.isCapabilityAllowedInScope('screen.capture', ['web.*'])).toBe(false);
+  });
+
   it('rejects expired in-memory permission', async () => {
     const permEngine = new PermissionEngine();
     permEngine.grantInMemory('u1', 'web.read', 'ws-1', undefined, -1000); // expired 1s ago
