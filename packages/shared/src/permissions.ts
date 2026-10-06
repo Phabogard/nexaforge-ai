@@ -21,6 +21,17 @@ export type Capability =
   | 'ai.execute'
   | 'ai.analyze';
 
+export type CapabilityNamespace =
+  | 'web'
+  | 'screen'
+  | 'device'
+  | 'calendar'
+  | 'contacts'
+  | 'application'
+  | 'ai';
+
+export type CapabilityGrant = Capability | `${CapabilityNamespace}.*`;
+
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type PolicyDecision = 'allow' | 'deny' | 'require_approval';
 
