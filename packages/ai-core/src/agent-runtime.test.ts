@@ -162,11 +162,32 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     permEngine.grantInMemory('u1', 'screen.capture');
 
     const policyEngine = new PolicyEngine();
-    const mockAuditRepo = { addAuditLog: async () => ({}) } as any;
+    const actionStates = new Map<string, 'pending' | 'executed' | 'failed' | 'cancelled'>();
+    const consumedApprovals = new Set<string>();
+    const mockAuditRepo = {
+      addAuditLog: async () => ({}),
+      reserveAction: async ({ actionId }: { actionId: string }) => {
+        if (actionStates.has(actionId)) {
+          return { reserved: false, existingStatus: actionStates.get(actionId) };
+        }
+        actionStates.set(actionId, 'pending');
+        return { reserved: true };
+      },
+      updateActionStatus: async ({ actionId, status }: { actionId: string; status: 'executed' | 'failed' | 'cancelled' }) => {
+        if (!actionStates.has(actionId)) return false;
+        actionStates.set(actionId, status);
+        return true;
+      },
+      consumeApproval: async ({ approvalId }: { approvalId: string }) => {
+        if (consumedApprovals.has(approvalId)) return false;
+        consumedApprovals.add(approvalId);
+        return true;
+      }
+    } as any;
     const logger = new AuditLogger(mockAuditRepo);
 
-    // Engine without secret -> fails closed
-    const noSecretEngine = new ActionEngine(permEngine, policyEngine, logger, null, undefined);
+    // Engine without secret -> fails closed before any approval can be consumed.
+    const noSecretEngine = new ActionEngine(permEngine, policyEngine, logger, mockAuditRepo, undefined);
 
     const ctx: AgentExecutionContext = {
       agentId: 'agent-companion',
@@ -209,7 +230,7 @@ describe('Agent Runtime & Action Engine Hardening', () => {
     expect(noSecretRes.error).toBe('ACTION_APPROVAL_SECRET_REQUIRED');
 
     // Engine with secret
-    const actionEngine = new ActionEngine(permEngine, policyEngine, logger, null, TEST_SECRET);
+    const actionEngine = new ActionEngine(permEngine, policyEngine, logger, mockAuditRepo, TEST_SECRET);
 
     // Tampered scope
     const validSig = signApproval(baseApproval, TEST_SECRET);
