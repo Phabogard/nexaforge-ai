@@ -384,6 +384,7 @@ export class ActionEngine {
           error: 'EXPLICIT_APPROVAL_REQUIRED'
         };
       }
+    }
 
     // 4. MANDATORY PRE-EXECUTION AUDIT FOR HIGH / CRITICAL ACTIONS
     if (riskLevel === 'HIGH' || riskLevel === 'CRITICAL') {
