@@ -308,6 +308,78 @@ describe('Agent Runtime & Action Engine Hardening', () => {
   });
 });
 
+describe('Approval durability ordering', () => {
+  it('does not consume an approval when mandatory pre-execution audit fails', async () => {
+    const permEngine = new PermissionEngine();
+    permEngine.grantInMemory('u1', 'screen.capture');
+    const policyEngine = new PolicyEngine();
+    let consumed = false;
+    let status: string = 'pending';
+
+    const repo = {
+      addAuditLog: async () => {
+        throw new Error('AUDIT_DB_DOWN');
+      },
+      reserveAction: async () => {
+        status = 'pending';
+        return { reserved: true };
+      },
+      updateActionStatus: async ({ status: next }: { status: string }) => {
+        status = next;
+        return true;
+      },
+      consumeApproval: async () => {
+        consumed = true;
+        return true;
+      }
+    } as any;
+
+    const logger = new AuditLogger(repo);
+    const engine = new ActionEngine(permEngine, policyEngine, logger, repo, TEST_SECRET);
+    const ctx: AgentExecutionContext = {
+      agentId: 'agent-companion',
+      agentType: 'PersonalAssistantAgent',
+      userId: 'u1',
+      workspaceId: 'ws-approval',
+      currentDepth: 1,
+      currentIteration: 1,
+      startTime: Date.now()
+    };
+
+    const approvalBase: Omit<ActionApproval, 'signature'> = {
+      approvalId: 'appr-audit-failure',
+      userId: 'u1',
+      workspaceId: 'ws-approval',
+      agentId: 'agent-companion',
+      actionId: 'act-audit-failure',
+      capability: 'screen.capture',
+      scope: { region: 'full' },
+      timestamp: Date.now(),
+      decision: 'approved',
+      expiresAt: Date.now() + 60000
+    };
+
+    const result = await engine.executeAction(
+      ctx,
+      {
+        actionId: approvalBase.actionId,
+        capability: approvalBase.capability,
+        tool: 'capture_screen',
+        actionName: 'Capture Screen',
+        description: 'Capture screen frame',
+        params: { region: 'full' },
+        approval: { ...approvalBase, signature: signApproval(approvalBase, TEST_SECRET) }
+      },
+      async () => ({ frame: 'img' })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('MANDATORY_AUDIT_LOG_FAILED');
+    expect(consumed).toBe(false);
+    expect(status).toBe('failed');
+  });
+});
+
 import { BoundedAgentExecutor, createToolRegistry } from './runtime.js';
 import type { AgentTask } from '@nexaforge/shared';
 
