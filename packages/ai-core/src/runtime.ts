@@ -25,111 +25,118 @@ export class BoundedAgentExecutor {
 
   async run(task: AgentTask, options?: { signal?: AbortSignal }): Promise<RuntimeResult> {
     const startTime = Date.now();
-    const max = Math.max(1, Math.min(task.maxIterations || DEFAULT_EXECUTION_LIMITS.maxIterations, DEFAULT_EXECUTION_LIMITS.maxIterations));
+    const max = Math.max(
+      1,
+      Math.min(
+        task.maxIterations || DEFAULT_EXECUTION_LIMITS.maxIterations,
+        DEFAULT_EXECUTION_LIMITS.maxIterations
+      )
+    );
 
     const durationController = new AbortController();
     const onExternalAbort = () => durationController.abort();
+
     if (options?.signal) {
       if (options.signal.aborted) durationController.abort();
       else options.signal.addEventListener('abort', onExternalAbort, { once: true });
     }
+
     const durationTimer = setTimeout(
       () => durationController.abort(),
       DEFAULT_EXECUTION_LIMITS.maxDurationMs
     );
 
-    const ctx: AgentExecutionContext = {
-      agentId: 'bounded-executor',
-      agentType: 'PlanningAgent',
-      userId: task.workspaceId ? `user-${task.workspaceId}` : 'default-user',
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      currentDepth: 1,
-      currentIteration: 0,
-      currentStep: 0,
-      toolCallCount: 0,
-      modelCallCount: 0,
-      startTime,
-      signal: durationController.signal
-    };
-
-    // 1. Initial validation
-    RuntimeValidator.validateLimits(ctx, { maxIterations: max });
-
-    // 2. Planning phase (Model Call 1)
-    ctx.modelCallCount = (ctx.modelCallCount ?? 0) + 1;
-    ctx.currentStep = 1;
-    RuntimeValidator.validateLimits(ctx, { maxIterations: max });
-
-    const plan = (await this.runtime.plan(task)).slice(0, max);
-
-    // 3. Execution phase (Iterating steps, calling tools and models)
-    ctx.currentStep = 2;
-    ctx.currentIteration = 1;
-    RuntimeValidator.validateLimits(ctx, { maxIterations: max });
-
-    const calls = await this.runtime.execute(task, plan, durationController.signal);
-
-    // Count executed tool calls
-    ctx.toolCallCount = (ctx.toolCallCount ?? 0) + calls.length;
-    RuntimeValidator.validateLimits(ctx, { maxIterations: max });
-
-    const hasPendingApproval = calls.some(call => call.status === 'proposed');
-    const hasFailure = calls.some(call => call.status === 'failed' || call.status === 'blocked');
-
-    if (hasPendingApproval) {
-      clearTimeout(durationTimer);
-      if (options?.signal) options.signal.removeEventListener('abort', onExternalAbort);
-      return {
-        calls,
-        status: 'waiting',
-        metrics: {
-          iterations: ctx.currentIteration,
-          steps: ctx.currentStep,
-          toolCalls: ctx.toolCallCount,
-          modelCalls: ctx.modelCallCount,
-          durationMs: Date.now() - startTime
-        }
+    try {
+      const ctx: AgentExecutionContext = {
+        agentId: 'bounded-executor',
+        agentType: 'PlanningAgent',
+        userId: task.workspaceId ? `user-${task.workspaceId}` : 'default-user',
+        workspaceId: task.workspaceId,
+        taskId: task.id,
+        currentDepth: 1,
+        currentIteration: 0,
+        currentStep: 0,
+        toolCallCount: 0,
+        modelCallCount: 0,
+        startTime,
+        signal: durationController.signal
       };
-    }
 
-    if (hasFailure) {
-      clearTimeout(durationTimer);
-      if (options?.signal) options.signal.removeEventListener('abort', onExternalAbort);
-      return {
-        calls,
-        status: 'failed',
-        metrics: {
-          iterations: ctx.currentIteration,
-          steps: ctx.currentStep,
-          toolCalls: ctx.toolCallCount,
-          modelCalls: ctx.modelCallCount,
-          durationMs: Date.now() - startTime
-        }
-      };
-    }
+      RuntimeValidator.validateLimits(ctx, { maxIterations: max });
 
-    // 4. Synthesis phase (Model Call 2)
-    ctx.currentStep = 3;
-    ctx.modelCallCount = (ctx.modelCallCount ?? 0) + 1;
-    RuntimeValidator.validateLimits(ctx, { maxIterations: max });
+      // Planning phase (model call 1).
+      ctx.modelCallCount = 1;
+      ctx.currentStep = 1;
+      RuntimeValidator.validateLimits(ctx, { maxIterations: max });
+      const plan = (await this.runtime.plan(task)).slice(0, max);
 
-    const answer = await this.runtime.synthesize(task, calls);
+      // Tool execution phase.
+      ctx.currentStep = 2;
+      ctx.currentIteration = 1;
+      RuntimeValidator.validateLimits(ctx, { maxIterations: max });
 
-    clearTimeout(durationTimer);
-    if (options?.signal) options.signal.removeEventListener('abort', onExternalAbort);
-    return {
-      calls,
-      answer,
-      status: 'completed',
-      metrics: {
-        iterations: ctx.currentIteration,
-        steps: ctx.currentStep,
-        toolCalls: ctx.toolCallCount,
-        modelCalls: ctx.modelCallCount,
-        durationMs: Date.now() - startTime
+      const calls = await this.runtime.execute(task, plan, durationController.signal);
+
+      ctx.toolCallCount = calls.length;
+      RuntimeValidator.validateLimits(ctx, { maxIterations: max });
+
+      const hasPendingApproval = calls.some(call => call.status === 'proposed');
+      const hasFailure = calls.some(
+        call => call.status === 'failed' || call.status === 'blocked'
+      );
+
+      if (hasPendingApproval) {
+        return {
+          calls,
+          status: 'waiting',
+          metrics: {
+            iterations: ctx.currentIteration,
+            steps: ctx.currentStep ?? 0,
+            toolCalls: ctx.toolCallCount ?? 0,
+            modelCalls: ctx.modelCallCount ?? 0,
+            durationMs: Date.now() - startTime
+          }
+        };
       }
-    };
+
+      if (hasFailure) {
+        return {
+          calls,
+          status: 'failed',
+          metrics: {
+            iterations: ctx.currentIteration,
+            steps: ctx.currentStep ?? 0,
+            toolCalls: ctx.toolCallCount ?? 0,
+            modelCalls: ctx.modelCallCount ?? 0,
+            durationMs: Date.now() - startTime
+          }
+        };
+      }
+
+      // Synthesis phase (model call 2).
+      ctx.currentStep = 3;
+      ctx.modelCallCount = 2;
+      RuntimeValidator.validateLimits(ctx, { maxIterations: max });
+      const answer = await this.runtime.synthesize(task, calls);
+
+      return {
+        calls,
+        answer,
+        status: 'completed',
+        metrics: {
+          iterations: ctx.currentIteration,
+          steps: ctx.currentStep ?? 0,
+          toolCalls: ctx.toolCallCount ?? 0,
+          modelCalls: ctx.modelCallCount ?? 0,
+          durationMs: Date.now() - startTime
+        }
+      };
+    } finally {
+      clearTimeout(durationTimer);
+      if (options?.signal) {
+        options.signal.removeEventListener('abort', onExternalAbort);
+      }
+    }
   }
 }
 
