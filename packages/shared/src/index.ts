@@ -45,3 +45,5 @@ export interface Source {
 }
 
 export * from './application-builder.js';
+
+export * from "./permissions.js";

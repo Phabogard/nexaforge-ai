@@ -11,7 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@nexaforge/shared": "workspace:*"
+    "@nexaforge/shared": "workspace:*",
+    "@nexaforge/db": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
