@@ -7,6 +7,9 @@ import {
 } from './agent-runtime.js';
 import { ToolRegistry } from './tool-registry.js';
 
+export interface RuntimeExecutionContext extends AgentExecutionContext {
+  requiredCapabilities?: import('@nexaforge/shared').Capability[];
+}
 export interface RuntimeResult {
   calls: ToolCall[];
   answer?: string;
@@ -23,7 +26,7 @@ export interface RuntimeResult {
 export class BoundedAgentExecutor {
   constructor(private readonly runtime: AgentRuntime, private readonly registry: ToolRegistry) {}
 
-  async run(task: AgentTask, options?: { signal?: AbortSignal }): Promise<RuntimeResult> {
+  async run(task: AgentTask, options?: { signal?: AbortSignal; context?: RuntimeExecutionContext }): Promise<RuntimeResult> {
     const startTime = Date.now();
     const max = Math.max(
       1,
@@ -48,10 +51,11 @@ export class BoundedAgentExecutor {
 
     try {
       const ctx: AgentExecutionContext = {
-        agentId: 'bounded-executor',
-        agentType: 'PlanningAgent',
-        userId: task.workspaceId ? `user-${task.workspaceId}` : 'default-user',
-        workspaceId: task.workspaceId,
+        ...(options?.context ?? {}),
+        agentId: options?.context?.agentId ?? 'bounded-executor',
+        agentType: options?.context?.agentType ?? 'PlanningAgent',
+        userId: options?.context?.userId ?? (task.workspaceId ? `user-${task.workspaceId}` : 'default-user'),
+        workspaceId: options?.context?.workspaceId ?? task.workspaceId,
         taskId: task.id,
         currentDepth: 1,
         currentIteration: 0,
@@ -75,7 +79,7 @@ export class BoundedAgentExecutor {
       ctx.currentIteration = 1;
       RuntimeValidator.validateLimits(ctx, { maxIterations: max });
 
-      const calls = await this.runtime.execute(task, plan, durationController.signal);
+      const calls = await this.runtime.execute(task, plan, durationController.signal, ctx);
 
       ctx.toolCallCount = calls.length;
       RuntimeValidator.validateLimits(ctx, { maxIterations: max });
