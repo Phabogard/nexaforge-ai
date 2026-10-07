@@ -38,7 +38,9 @@ export function verifyBearerToken(authorization: string | undefined): Authentica
   if (a.length !== b.length || !timingSafeEqual(a, b)) throw new Error('INVALID_AUTH_TOKEN');
 
   if (typeof payload.sub !== 'string' || !payload.sub) throw new Error('AUTH_SUBJECT_REQUIRED');
-  if (typeof payload.exp !== 'number' || payload.exp <= Math.floor(Date.now() / 1000)) throw new Error('AUTH_TOKEN_EXPIRED');
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof payload.exp !== 'number' || payload.exp <= now) throw new Error('AUTH_TOKEN_EXPIRED');
+  if (payload.nbf !== undefined && (typeof payload.nbf !== 'number' || payload.nbf > now)) throw new Error('AUTH_TOKEN_NOT_YET_VALID');
 
   const issuer = process.env.NEXAFORGE_AUTH_ISSUER;
   if (issuer && payload.iss !== issuer) throw new Error('AUTH_ISSUER_MISMATCH');

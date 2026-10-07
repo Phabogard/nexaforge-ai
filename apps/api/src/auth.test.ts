@@ -21,4 +21,10 @@ describe('bearer identity verification', () => {
     const jwt = token('test-secret', { sub:'user-1', exp:Math.floor(Date.now()/1000)-1 });
     expect(() => verifyBearerToken('Bearer ' + jwt)).toThrow('AUTH_TOKEN_EXPIRED');
   });
+
+  it('rejects tokens that are not yet valid', () => {
+    process.env.NEXAFORGE_AUTH_JWT_SECRET = 'test-secret';
+    const jwt = token('test-secret', { sub:'user-1', exp:Math.floor(Date.now()/1000)+300, nbf:Math.floor(Date.now()/1000)+60 });
+    expect(() => verifyBearerToken('Bearer ' + jwt)).toThrow('AUTH_TOKEN_NOT_YET_VALID');
+  });
 });
