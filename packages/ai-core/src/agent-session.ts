@@ -68,6 +68,8 @@ export class AgentSessionManager {
   async get(id: string, expectedScope?: { userId?: string; workspaceId?: string; agentId?: string }): Promise<AgentSession | null> {
     const record = await this.repository.getAgentSession(id);
     if (!record) return null;
+    if (record.status !== 'active') return null;
+    if (record.expiresAt && new Date(record.expiresAt).getTime() <= Date.now()) return null;
 
     const recordAgentId = typeof record.metadata === 'object' && record.metadata !== null
       ? (record.metadata as Record<string, unknown>).agentId
