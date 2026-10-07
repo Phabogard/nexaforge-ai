@@ -103,8 +103,9 @@ app.post('/api/v1/workspaces', async (request, reply) => {
   try {
     const workspace = await repository.createAuthenticatedWorkspace({ authSubject:identity.userId, email:identity.email, workspaceName:'NexaForge Workspace' });
     if (!securityRepository) return reply.code(503).send({ error:'SECURITY_REPOSITORY_NOT_CONFIGURED' });
-    const existing = await securityRepository.getPermission(identity.userId, 'ai.execute', workspace.id);
-    if (!existing) await securityRepository.grantPermission({ userId:identity.userId, workspaceId:workspace.id, capability:'ai.execute', grantedBy:'system' });
+    const internalUserId = workspace.ownerId;
+    const existing = await securityRepository.getPermission(internalUserId, 'ai.execute', workspace.id);
+    if (!existing) await securityRepository.grantPermission({ userId:internalUserId, workspaceId:workspace.id, capability:'ai.execute', grantedBy:'system' });
     return reply.code(201).send({ workspace });
   } catch (error) { request.log.error(error); const code = error instanceof Error ? error.message : 'AUTHENTICATED_WORKSPACE_CREATE_FAILED'; return reply.code(code === 'AUTH_EMAIL_ALREADY_BOUND' ? 409 : 500).send({ error: code }); }
 });
@@ -118,12 +119,13 @@ app.post('/api/v1/agent-sessions', async (request, reply) => {
   if (!workspaceId) return reply.code(400).send({ error:'WORKSPACE_REQUIRED' });
   const workspace = await repository.getWorkspace(workspaceId);
   if (!workspace) return reply.code(404).send({ error:'WORKSPACE_NOT_FOUND' });
-  if (workspace.ownerId !== identity.userId) return reply.code(403).send({ error:'WORKSPACE_ACCESS_DENIED' });
+  const internalUserId = await repository.getUserIdByAuthSubject(identity.userId);
+  if (!internalUserId || workspace.ownerId !== internalUserId) return reply.code(403).send({ error:'WORKSPACE_ACCESS_DENIED' });
   try {
     const { AgentSessionManager, PermissionEngine } = await import('@nexaforge/ai-core');
     if (!securityRepository) return reply.code(503).send({ error:'SECURITY_REPOSITORY_NOT_CONFIGURED' });
     const manager = new AgentSessionManager(securityRepository, new PermissionEngine(securityRepository));
-    const session = await manager.start({ userId:identity.userId, workspaceId, agentId:parsed.data.agentId, agentType:parsed.data.agentType, requiredCapabilities:parsed.data.requiredCapabilities as any, expiresAt:parsed.data.expiresAt });
+    const session = await manager.start({ userId:internalUserId, workspaceId, agentId:parsed.data.agentId, agentType:parsed.data.agentType, requiredCapabilities:parsed.data.requiredCapabilities as any, expiresAt:parsed.data.expiresAt });
     return reply.code(201).send({ session });
   } catch (error) { request.log.error(error); return reply.code(500).send({ error:'AGENT_SESSION_CREATE_FAILED' }); }
 });
@@ -136,7 +138,8 @@ app.post('/api/v1/agent-sessions/:sessionId/execute', async (request, reply) => 
   const sessionId = (request.params as {sessionId:string}).sessionId;
   if (!securityRepository) return reply.code(503).send({ error:'SECURITY_REPOSITORY_NOT_CONFIGURED' });
   const record = await securityRepository.getAgentSession(sessionId);
-  if (!record || record.userId !== identity.userId) return reply.code(403).send({ error:'AGENT_SESSION_SCOPE_MISMATCH' });
+  const internalUserId = await repository.getUserIdByAuthSubject(identity.userId);
+  if (!internalUserId || !record || record.userId !== internalUserId) return reply.code(403).send({ error:'AGENT_SESSION_SCOPE_MISMATCH' });
   if (identity.workspaceId && record.workspaceId !== identity.workspaceId) return reply.code(403).send({ error:'WORKSPACE_SCOPE_MISMATCH' });
   const metadata = (record.metadata ?? {}) as Record<string,unknown>; const agentId = typeof metadata.agentId === 'string' ? metadata.agentId : '';
   if (!agentId) return reply.code(403).send({ error:'AGENT_SESSION_SCOPE_MISSING' });
@@ -147,7 +150,7 @@ app.post('/api/v1/agent-sessions/:sessionId/execute', async (request, reply) => 
     const runtime = core.createSupervisor(registry.list(), core.createConfiguredModelProvider(), action);
     const secure = new core.SecureAgentExecutor(securityRepository, new core.BoundedAgentExecutor(runtime, registry));
     const task:any = { id:randomUUID(), workspaceId:record.workspaceId ?? undefined, prompt:body.data.prompt, mode:body.data.mode as AgentMode, status:'running', maxIterations:body.data.maxIterations, budgetCents:body.data.budgetCents };
-    const result = await secure.run({ task, userId:identity.userId, workspaceId:record.workspaceId ?? undefined, agentId, agentType:record.agentType as any, sessionId, requiredCapabilities:body.data.requiredCapabilities as any });
+    const result = await secure.run({ task, userId:internalUserId, workspaceId:record.workspaceId ?? undefined, agentId, agentType:record.agentType as any, sessionId, requiredCapabilities:body.data.requiredCapabilities as any });
     return { task, result };
   } catch (error) {
     request.log.error(error);
