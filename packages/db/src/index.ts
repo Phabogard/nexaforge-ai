@@ -107,6 +107,7 @@ export interface TaskRepository {
   listEvents(taskId: string): Promise<TaskEventRecord[]>;
   createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
   workspaceExists(id: string): Promise<boolean>;
+  getWorkspace(id: string): Promise<WorkspaceRecord | null>;
   getOrCreateDefaultWorkspace(): Promise<WorkspaceRecord>;
 }
 
@@ -141,6 +142,7 @@ class PostgresTaskRepository implements TaskRepository {
   async listEvents(taskId: string): Promise<TaskEventRecord[]> { const rows = await this.sql`SELECT id, task_id, event_type, payload, created_at FROM task_events WHERE task_id = ${taskId}::uuid ORDER BY created_at ASC`; return rows.map(row => toEvent(row as Record<string, unknown>)); }
   async createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord> { const rows = await this.sql`WITH new_user AS (INSERT INTO users (email, display_name) VALUES (${input.email}, ${input.displayName ?? null}) ON CONFLICT (email) DO UPDATE SET display_name = COALESCE(EXCLUDED.display_name, users.display_name) RETURNING id) INSERT INTO workspaces (name, owner_id) SELECT ${input.workspaceName ?? 'NexaForge Workspace'}, id FROM new_user RETURNING id, name, owner_id, created_at`; return toWorkspace(rows[0] as Record<string, unknown>); }
   async workspaceExists(id: string): Promise<boolean> { const rows = await this.sql`SELECT 1 FROM workspaces WHERE id = ${id}::uuid LIMIT 1`; return rows.length > 0; }
+  async getWorkspace(id: string): Promise<WorkspaceRecord | null> { const rows = await this.sql`SELECT id, name, owner_id, created_at FROM workspaces WHERE id = ${id}::uuid LIMIT 1`; return rows.length ? toWorkspace(rows[0] as Record<string, unknown>) : null; }
   async getOrCreateDefaultWorkspace(): Promise<WorkspaceRecord> { const existing = await this.sql`SELECT id, name, owner_id, created_at FROM workspaces ORDER BY created_at ASC LIMIT 1`; if (existing.length > 0) return toWorkspace(existing[0] as Record<string, unknown>); return this.createWorkspace({ email:'default@nexaforge.ai', displayName:'Default User', workspaceName:'Default Workspace' }); }
 }
 
