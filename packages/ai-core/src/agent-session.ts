@@ -54,6 +54,7 @@ export class AgentSessionManager {
     const record = await this.repository.createAgentSession({
       userId: request.userId,
       workspaceId: request.workspaceId,
+      agentId: request.agentId,
       agentType: request.agentType,
       grantedCapabilities,
       metadata: {

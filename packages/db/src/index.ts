@@ -35,7 +35,7 @@ export type TaskEventRecord = {
 export type PermissionRecord = { id: string; userId: string; workspaceId?: string | null; agentId?: string | null; capability: string; status: string; scope: unknown; expiresAt?: string | null; grantedBy?: string | null; createdAt: string; updatedAt: string };
 export type SecurityPolicyRecord = { id: string; workspaceId?: string | null; capability: string; riskLevel: string; policyAction: string; createdAt: string; updatedAt: string };
 export type AuditLogRecord = { id: string; requestId?: string | null; actor: string; actorType: string; userId?: string | null; workspaceId?: string | null; agentId?: string | null; applicationId?: string | null; capability: string; tool?: string | null; action: string; status: string; reason?: string | null; payload: unknown; createdAt: string };
-export type AgentSessionRecord = { id: string; userId: string; workspaceId?: string | null; agentType: string; status: string; grantedCapabilities: string[]; metadata: unknown; createdAt: string; expiresAt?: string | null };
+export type AgentSessionRecord = { id: string; userId: string; workspaceId?: string | null; agentId: string; agentType: string; status: string; grantedCapabilities: string[]; metadata: unknown; createdAt: string; expiresAt?: string | null };
 
 export interface PermissionRepository {
   grantPermission(input: { userId: string; workspaceId?: string; agentId?: string; capability: string; scope?: unknown; expiresAt?: string; grantedBy?: string }): Promise<PermissionRecord>;
@@ -46,7 +46,7 @@ export interface PermissionRepository {
   getPolicy(capability: string, workspaceId?: string): Promise<SecurityPolicyRecord | null>;
   addAuditLog(input: { requestId?: string; actor: string; actorType: string; userId?: string; workspaceId?: string; agentId?: string; applicationId?: string; capability: string; tool?: string; action: string; status: string; reason?: string; payload?: unknown }): Promise<AuditLogRecord>;
   listAuditLogs(filter: { userId?: string; workspaceId?: string; limit?: number }): Promise<AuditLogRecord[]>;
-  createAgentSession(input: { userId: string; workspaceId?: string; agentType: string; grantedCapabilities?: string[]; metadata?: unknown; expiresAt?: string }): Promise<AgentSessionRecord>;
+  createAgentSession(input: { userId: string; workspaceId?: string; agentId: string; agentType: string; grantedCapabilities?: string[]; metadata?: unknown; expiresAt?: string }): Promise<AgentSessionRecord>;
   getAgentSession(id: string): Promise<AgentSessionRecord | null>;
   revokeAgentSession(id: string): Promise<boolean>;
   consumeApproval(input: { approvalId: string; actionId: string; userId: string; workspaceId?: string; agentId?: string }): Promise<boolean>;
@@ -236,7 +236,7 @@ const toAuditLog = (r: Record<string, unknown>): AuditLogRecord => ({
 
 const toAgentSession = (r: Record<string, unknown>): AgentSessionRecord => ({
   id: String(r.id), userId: String(r.user_id), workspaceId: r.workspace_id ? String(r.workspace_id) : null,
-  agentType: String(r.agent_type), status: String(r.status),
+  agentId: String(r.agent_id), agentType: String(r.agent_type), status: String(r.status),
   grantedCapabilities: Array.isArray(r.granted_capabilities) ? r.granted_capabilities.map(String) : [],
   metadata: r.metadata ?? {}, createdAt: new Date(String(r.created_at)).toISOString(),
   expiresAt: r.expires_at ? new Date(String(r.expires_at)).toISOString() : null
@@ -280,7 +280,9 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
       return r.map(x => toAuditLog(x as Record<string, unknown>));
     },
     async createAgentSession(i) {
-      const r = await sql`INSERT INTO agent_sessions(user_id, workspace_id, agent_type, granted_capabilities, metadata, expires_at) VALUES(${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentType}, ${JSON.stringify(i.grantedCapabilities ?? [])}::jsonb, ${JSON.stringify(i.metadata ?? {})}::jsonb, ${i.expiresAt ? new Date(i.expiresAt) : null}) RETURNING *`;
+      const agentId = i.agentId;
+      if (!agentId) throw new Error('AGENT_ID_REQUIRED');
+      const r = await sql`INSERT INTO agent_sessions(user_id, workspace_id, agent_id, agent_type, granted_capabilities, metadata, expires_at) VALUES(${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentType}, ${JSON.stringify(i.grantedCapabilities ?? [])}::jsonb, ${JSON.stringify(i.metadata ?? {})}::jsonb, ${i.expiresAt ? new Date(i.expiresAt) : null}) RETURNING *`;
       return toAgentSession(r[0] as Record<string, unknown>);
     },
     async getAgentSession(id) {
