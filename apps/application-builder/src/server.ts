@@ -23,7 +23,10 @@ const port = Number(process.env.PORT ?? '10000');
 const host = process.env.HOST ?? '0.0.0.0';
 
 async function start() {
-  if (buildEnabled) {\n    assertApplicationWorkerIsolation();\n    await assertDockerDaemonAvailable();\n  }
+  if (buildEnabled) {
+    assertApplicationWorkerIsolation();
+    await assertDockerDaemonAvailable();
+  }
   buildWorker?.start();
   await app.listen({ port, host });
 }
