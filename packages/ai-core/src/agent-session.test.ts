@@ -74,4 +74,32 @@ describe('AgentSessionManager', () => {
     expect(await manager.get('session-2', { userId: 'u1', workspaceId: 'ws1', agentId: 'agent-2' })).not.toBeNull();
     expect(await manager.close('session-2', { userId: 'u1', workspaceId: 'ws1', agentId: 'agent-2' })).toBe(true);
   });
+
+  it('rejects revoked and expired sessions', async () => {
+    const revoked = {
+      id: 'revoked',
+      userId: 'u1',
+      workspaceId: 'ws1',
+      agentType: 'BrowserAgent',
+      status: 'revoked',
+      grantedCapabilities: ['web.read'],
+      metadata: { agentId: 'agent-2' },
+      createdAt: new Date().toISOString(),
+      expiresAt: null
+    };
+    const expired = {
+      ...revoked,
+      id: 'expired',
+      status: 'active',
+      expiresAt: new Date(Date.now() - 1000).toISOString()
+    };
+    const repository = {
+      getAgentSession: async (id: string) => id === revoked.id ? revoked : id === expired.id ? expired : null
+    } as any;
+
+    const manager = new AgentSessionManager(repository, new PermissionEngine(repository));
+
+    expect(await manager.get('revoked', { userId: 'u1', workspaceId: 'ws1', agentId: 'agent-2' })).toBeNull();
+    expect(await manager.get('expired', { userId: 'u1', workspaceId: 'ws1', agentId: 'agent-2' })).toBeNull();
+  });
 });
