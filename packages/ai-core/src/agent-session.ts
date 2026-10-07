@@ -1,4 +1,5 @@
-import type { AgentType, Capability } from '@nexaforge/shared';
+import type { Capability } from '@nexaforge/shared';
+import type { AgentType } from './agent-runtime.js';
 import type { AgentSessionRecord, PermissionRepository } from '@nexaforge/db';
 import { CapabilityEngine } from './capability-engine.js';
 import { PermissionEngine } from './permission-engine.js';
