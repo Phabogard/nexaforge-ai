@@ -132,7 +132,7 @@ describe('authenticated agent execution E2E flow', () => {
       exp: Math.floor(Date.now() / 1000) + 300
     })}`;
 
-    const identity = verifyBearerToken(authorization);
+    const identity = await verifyBearerToken(authorization);
     expect(identity).toEqual({ userId: USER_ID, workspaceId: WORKSPACE_ID });
 
     const repository = createRepository();
@@ -206,7 +206,7 @@ describe('authenticated agent execution E2E flow', () => {
     )).toBe(true);
   });
 
-  it('rejects a token that is validly signed but outside its validity window', () => {
+  it('rejects a token that is validly signed but outside its validity window', async () => {
     const token = makeJwt({
       sub: USER_ID,
       workspace_id: WORKSPACE_ID,
@@ -214,6 +214,6 @@ describe('authenticated agent execution E2E flow', () => {
       exp: Math.floor(Date.now() / 1000) + 300
     });
 
-    expect(() => verifyBearerToken(`Bearer ${token}`)).toThrow('AUTH_TOKEN_NOT_YET_VALID');
+    await expect(verifyBearerToken(`Bearer ${token}`)).rejects.toThrow('AUTH_TOKEN_NOT_YET_VALID');
   });
 });
