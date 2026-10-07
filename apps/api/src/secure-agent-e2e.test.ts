@@ -192,8 +192,11 @@ describe('authenticated agent execution E2E flow', () => {
     expect(result.calls[0]?.output).toEqual({ value: 'nexaforge-e2e-ok' });
     expect(executedBy).toBe(WORKSPACE_ID);
 
-    const executedAction = repository.actions.get('task-e2e-1');
-    expect(executedAction?.status).toBe('executed');
+    const executedActions = [...repository.actions.values()].filter((action) => action.status === 'executed');
+    expect(executedActions).toHaveLength(1);
+    expect(executedActions[0].userId).toBe(USER_ID);
+    expect(executedActions[0].workspaceId).toBe(WORKSPACE_ID);
+    expect(executedActions[0].agentId).toBe(AGENT_ID);
     expect(repository.audits.some((entry) =>
       entry.userId === USER_ID &&
       entry.workspaceId === WORKSPACE_ID &&
