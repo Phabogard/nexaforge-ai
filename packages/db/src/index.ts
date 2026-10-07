@@ -46,7 +46,7 @@ export interface PermissionRepository {
   getPolicy(capability: string, workspaceId?: string): Promise<SecurityPolicyRecord | null>;
   addAuditLog(input: { requestId?: string; actor: string; actorType: string; userId?: string; workspaceId?: string; agentId?: string; applicationId?: string; capability: string; tool?: string; action: string; status: string; reason?: string; payload?: unknown }): Promise<AuditLogRecord>;
   listAuditLogs(filter: { userId?: string; workspaceId?: string; limit?: number }): Promise<AuditLogRecord[]>;
-  createAgentSession(input: { userId: string; workspaceId?: string; agentType: string; grantedCapabilities?: string[]; metadata?: unknown; expiresAt?: string }): Promise<AgentSessionRecord>;
+  createAgentSession(input: { userId: string; workspaceId?: string; agentId: string; agentType: string; grantedCapabilities?: string[]; metadata?: unknown; expiresAt?: string }): Promise<AgentSessionRecord>;
   getAgentSession(id: string): Promise<AgentSessionRecord | null>;
   revokeAgentSession(id: string): Promise<boolean>;
   consumeApproval(input: { approvalId: string; actionId: string; userId: string; workspaceId?: string; agentId?: string }): Promise<boolean>;
