@@ -46,7 +46,7 @@ export class ApplicationBuildWorker {
   cancel(id:string){this.controllers.get(id)?.abort();}
   private async loop(){while(this.running){let claimed=false;while(this.running&&this.active<this.concurrency){try{const build=await this.store.claimNextBuild(this.workerId,this.leaseSeconds);if(!build)break;claimed=true;this.active++;void this.process(build).finally(()=>{this.active--;});}catch(error){console.error('[nexaforge-application-worker]',error);break;}}if(this.running&&this.active===0&&!claimed)await new Promise<void>(r=>{this.timer=setTimeout(r,this.pollMs);});else if(this.running&&this.active>=this.concurrency)await new Promise<void>(r=>{this.timer=setTimeout(r,25);});}}
   private async process(build:ApplicationBuildRecord){
-    const controller=new AbortController();this.controllers.set(build.id,controller);const heartbeat=setInterval(()=>{void this.store.renewBuildLease(build.id,this.workerId,this.leaseSeconds).catch(()=>{});},20000);
+    const controller=new AbortController();this.controllers.set(build.id,controller);const buildTimeoutMs=Math.max(60000,Math.min(Number(process.env.NEXAFORGE_APPLICATION_BUILD_TIMEOUT_MS??'1800000')||1800000,7200000));const timeout=setTimeout(()=>controller.abort(),buildTimeoutMs);const heartbeat=setInterval(()=>{void this.store.renewBuildLease(build.id,this.workerId,this.leaseSeconds).catch(()=>{});},20000);
     const workspaceRoot=join(this.root,build.projectId);
     try{
       const project=await this.store.getProject(build.projectId);
@@ -123,6 +123,6 @@ export class ApplicationBuildWorker {
       if(current?.status==='cancelled') return;
       await this.store.addBuildEvent({buildId:build.id,eventType:controller.signal.aborted?'build.cancelled':'build.failed',phase:controller.signal.aborted?'cancelled':'failed',payload:{errorCode:message}});
       await this.store.updateBuild(build.id,{status:controller.signal.aborted?'cancelled':'failed',phase:controller.signal.aborted?'cancelled':'failed',errorCode:message});
-    }finally{clearInterval(heartbeat);this.controllers.delete(build.id);}
+    }finally{clearInterval(heartbeat);clearTimeout(timeout);this.controllers.delete(build.id);}
   }
 }
