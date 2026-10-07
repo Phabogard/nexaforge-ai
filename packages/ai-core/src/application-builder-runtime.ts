@@ -86,7 +86,11 @@ export function createApplicationBuilder(options: ApplicationBuilderOptions): Ap
           ...(options.sandboxPolicy ?? {})
         };
         const workspace = process.env.NEXAFORGE_APPLICATION_SANDBOX === 'container'
-          ? createContainerWorkspaceSandbox({ root: request.workspaceRoot })
+          ? createContainerWorkspaceSandbox({
+              root: request.workspaceRoot,
+              memoryMb: Math.max(128, Math.min(Number(process.env.NEXAFORGE_APPLICATION_SANDBOX_MEMORY_MB ?? '1024') || 1024, 8192)),
+              cpus: Math.max(0.25, Math.min(Number(process.env.NEXAFORGE_APPLICATION_SANDBOX_CPUS ?? '1') || 1, 4))
+            })
           : createWorkspaceSandbox(policy);
         const verifier = options.verifierFactory
           ? options.verifierFactory(request.workspaceRoot, blueprint)
