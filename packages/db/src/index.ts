@@ -282,7 +282,7 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
     async createAgentSession(i) {
       const agentId = i.agentId;
       if (!agentId) throw new Error('AGENT_ID_REQUIRED');
-      const r = await sql`INSERT INTO agent_sessions(user_id, workspace_id, agent_id, agent_type, granted_capabilities, metadata, expires_at) VALUES(${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentType}, ${JSON.stringify(i.grantedCapabilities ?? [])}::jsonb, ${JSON.stringify(i.metadata ?? {})}::jsonb, ${i.expiresAt ? new Date(i.expiresAt) : null}) RETURNING *`;
+      const r = await sql`INSERT INTO agent_sessions(user_id, workspace_id, agent_id, agent_type, granted_capabilities, metadata, expires_at) VALUES(${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId}, ${i.agentType}, ${JSON.stringify(i.grantedCapabilities ?? [])}::jsonb, ${JSON.stringify(i.metadata ?? {})}::jsonb, ${i.expiresAt ? new Date(i.expiresAt) : null}) RETURNING *`;
       return toAgentSession(r[0] as Record<string, unknown>);
     },
     async getAgentSession(id) {
