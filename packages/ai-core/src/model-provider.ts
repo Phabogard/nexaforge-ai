@@ -36,6 +36,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         headers: { 'content-type': 'application/json', authorization: `Bearer ${this.options.apiKey}` },
         body: JSON.stringify({
           model: this.options.model,
+          reasoning_effort: 'none',
           messages: [
             { role: 'system', content: input.system },
             ...input.messages.map(message => ({ role: message.role === 'assistant' ? 'assistant' : 'user', content: message.content }))
