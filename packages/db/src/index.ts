@@ -107,6 +107,7 @@ export interface TaskRepository {
   listEvents(taskId: string): Promise<TaskEventRecord[]>;
   createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
   createAuthenticatedWorkspace(input: { authSubject: string; email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
+  getUserIdByAuthSubject(authSubject: string): Promise<string | null>;
   workspaceExists(id: string): Promise<boolean>;
   getWorkspace(id: string): Promise<WorkspaceRecord | null>;
   getOrCreateDefaultWorkspace(): Promise<WorkspaceRecord>;
@@ -164,6 +165,7 @@ class PostgresTaskRepository implements TaskRepository {
     const created = await this.sql`INSERT INTO workspaces(name,owner_id) VALUES(${input.workspaceName ?? 'NexaForge Workspace'},${userId}::uuid) RETURNING id,name,owner_id,created_at`;
     return toWorkspace(created[0] as Record<string, unknown>);
   }
+  async getUserIdByAuthSubject(authSubject: string): Promise<string | null> { const rows = await this.sql`SELECT id FROM users WHERE auth_subject=${authSubject} LIMIT 1`; return rows.length ? String((rows[0] as Record<string, unknown>).id) : null; }
   async workspaceExists(id: string): Promise<boolean> { const rows = await this.sql`SELECT 1 FROM workspaces WHERE id = ${id}::uuid LIMIT 1`; return rows.length > 0; }
   async getWorkspace(id: string): Promise<WorkspaceRecord | null> { const rows = await this.sql`SELECT id, name, owner_id, created_at FROM workspaces WHERE id = ${id}::uuid LIMIT 1`; return rows.length ? toWorkspace(rows[0] as Record<string, unknown>) : null; }
   async getOrCreateDefaultWorkspace(): Promise<WorkspaceRecord> { const existing = await this.sql`SELECT id, name, owner_id, created_at FROM workspaces ORDER BY created_at ASC LIMIT 1`; if (existing.length > 0) return toWorkspace(existing[0] as Record<string, unknown>); return this.createWorkspace({ email:'default@nexaforge.ai', displayName:'Default User', workspaceName:'Default Workspace' }); }
