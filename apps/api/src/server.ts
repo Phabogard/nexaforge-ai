@@ -5,7 +5,6 @@ import { z } from 'zod';
 import { createTaskRepository, createApplicationRepository, type TaskRepository, type TaskRecord, type TaskEventRecord } from '@nexaforge/db';
 import type { AgentMode } from '@nexaforge/shared';
 import { configuredWorker, type TaskWorker } from './task-worker.js';
-import { ApplicationBuildWorker } from './application-worker.js';
 import { ApplicationDeploymentWorker } from './deployment-worker.js';
 import { createPermissionRepository } from '@nexaforge/db';
 import { verifyBearerToken } from './auth.js';
@@ -25,7 +24,6 @@ if (isProduction && !repository) {
 }
 
 export const worker: TaskWorker | null = repository ? configuredWorker(repository) : null;
-export const applicationWorker = applicationRepository ? new ApplicationBuildWorker(applicationRepository) : null;
 export const deploymentWorker = applicationRepository ? new ApplicationDeploymentWorker(applicationRepository) : null;
 
 const taskSchema = z.object({
@@ -176,7 +174,7 @@ app.register(cors, { origin: allowedOrigin, credentials: true });
 app.get('/health', async (request, reply) => {
   let dbOk = false;
   if (repository) dbOk = await repository.ping();
-  if (isProduction && (!repository || !dbOk)) return reply.code(503).send({ ok:false, service:'nexaforge-api', persistence:repository?'postgres_unhealthy':'missing', worker:worker?'running':'disabled', applicationWorker:applicationWorker?'running':'disabled' });
+  if (isProduction && (!repository || !dbOk)) return reply.code(503).send({ ok:false, service:'nexaforge-api', persistence:repository?'postgres_unhealthy':'missing', worker:worker?'running':'disabled', applicationWorker:'external' });
   return { ok:dbOk || (!repository && !isProduction), service:'nexaforge-api', persistence:repository?(dbOk?'postgres':'postgres_unhealthy'):'memory', worker:worker?'running':'disabled', applicationWorker:applicationWorker?'running':'disabled' };
 });
 
@@ -246,10 +244,10 @@ app.post('/api/v1/applications/:id/deployments', async (request, reply) => {if(!
 
 app.get('/api/v1/applications/:id/deployments', async (request, reply) => {if(!applicationRepository)return reply.code(503).send({error:'APPLICATION_BUILDER_DATABASE_NOT_CONFIGURED'});const {id}=request.params as {id:string};try{const project=await applicationRepository.getProject(id);if(!project)return reply.code(404).send({error:'APPLICATION_PROJECT_NOT_FOUND'});return{project,deployments:await applicationRepository.listDeployments(id)};}catch(error){request.log.error(error);return reply.code(500).send({error:'APPLICATION_DEPLOYMENTS_READ_FAILED'});}});
 
-const shutdown = async () => { worker?.stop(); applicationWorker?.stop(); deploymentWorker?.stop(); await app.close(); };
+const shutdown = async () => { worker?.stop(); deploymentWorker?.stop(); await app.close(); };
 process.once('SIGINT',()=>{void shutdown().finally(()=>process.exit(0));});
 process.once('SIGTERM',()=>{void shutdown().finally(()=>process.exit(0));});
 
 if(process.env.NODE_ENV!=='test'){
-  app.listen({port:Number(process.env.PORT??4000),host:process.env.HOST??'0.0.0.0'}).then(async()=>{if(repository){const pingOk=await repository.ping();if(pingOk)app.log.info('Connected to PostgreSQL/Neon database successfully.');else{app.log.error('Failed to ping PostgreSQL/Neon database on startup.');if(isProduction)process.exit(1);}}else app.log.warn('Running with in-memory store (DEVELOPMENT ONLY).');worker?.start();applicationWorker?.start();}).catch(error=>{app.log.error(error);process.exit(1);});
+  app.listen({port:Number(process.env.PORT??4000),host:process.env.HOST??'0.0.0.0'}).then(async()=>{if(repository){const pingOk=await repository.ping();if(pingOk)app.log.info('Connected to PostgreSQL/Neon database successfully.');else{app.log.error('Failed to ping PostgreSQL/Neon database on startup.');if(isProduction)process.exit(1);}}else app.log.warn('Running with in-memory store (DEVELOPMENT ONLY).');worker?.start();}).catch(error=>{app.log.error(error);process.exit(1);});
 }
