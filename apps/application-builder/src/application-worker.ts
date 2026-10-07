@@ -50,12 +50,12 @@ export class ApplicationBuildWorker {
     const workspaceRoot=join(this.root,build.projectId);
     try{
       const project=await this.store.getProject(build.projectId);
-      if(!project){await this.store.updateBuild(build.id,{status:'failed',phase:'failed',errorCode:'PROJECT_NOT_FOUND'});return;}
+      if(!project){await this.store.updateBuild(build.id,{status:'failed',phase:'failed',errorCode:'PROJECT_NOT_FOUND',workerId:this.workerId});return;}
       await this.store.addBuildEvent({buildId:build.id,eventType:'build.started',phase:'planning',payload:{projectId:project.id}});
       if(process.env.REQUIRE_APPLICATION_APPROVAL==='true'){
         const approval=await this.store.requestApproval({buildId:build.id,stepKey:'execution',reason:'Application generation executes package installation, tests and build commands inside the isolated workspace.'});
         if(approval.status!=='approved'){
-          await this.store.updateBuild(build.id,{status:'waiting_approval',phase:'waiting_approval'});
+          await this.store.updateBuild(build.id,{status:'waiting_approval',phase:'waiting_approval',workerId:this.workerId});
           await this.store.addBuildEvent({buildId:build.id,eventType:'approval.requested',phase:'waiting_approval',payload:{stepKey:'execution',reason:approval.reason}});
           return;
         }
@@ -67,7 +67,7 @@ export class ApplicationBuildWorker {
       const builder=createApplicationBuilder({model:createConfiguredModelProvider()});
       await this.store.upsertBuildStep({buildId:build.id,stepKey:'plan',phase:'planning',status:'running'});
       await this.store.addBuildEvent({buildId:build.id,eventType:'phase.started',phase:'planning'});
-      const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3,resumeFrom,checkpoint:async (checkpoint:any)=>{const previous=persistedSteps.find((step:any)=>step.stepKey===checkpoint.stepKey);const attempt=(previous?.attempt??0)+(checkpoint.status==='running'?1:0);await this.store.upsertBuildStep({buildId:build.id,stepKey:checkpoint.stepKey,phase:checkpoint.phase,status:checkpoint.status??'completed',attempt,output:checkpoint.output??{blueprint:checkpoint.blueprint,repairAttempts:checkpoint.repairAttempts},errorCode:checkpoint.errorCode});if(checkpoint.status!=='failed') await this.store.updateBuild(build.id,{status:'building',phase:checkpoint.phase,repairAttempts:checkpoint.repairAttempts});}},controller.signal);
+      const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3,resumeFrom,checkpoint:async (checkpoint:any)=>{const previous=persistedSteps.find((step:any)=>step.stepKey===checkpoint.stepKey);const attempt=(previous?.attempt??0)+(checkpoint.status==='running'?1:0);await this.store.upsertBuildStep({buildId:build.id,stepKey:checkpoint.stepKey,phase:checkpoint.phase,status:checkpoint.status??'completed',attempt,output:checkpoint.output??{blueprint:checkpoint.blueprint,repairAttempts:checkpoint.repairAttempts},errorCode:checkpoint.errorCode});if(checkpoint.status!=='failed') await this.store.updateBuild(build.id,{status:'building',phase:checkpoint.phase,repairAttempts:checkpoint.repairAttempts,workerId:this.workerId});}},controller.signal);
       const phaseMap:Record<string,string>={plan:'planning',scaffold:'scaffolding',code:'coding',install:'installing',test:'testing',repair:'repairing',validate:'validating'};
       for(const step of result.completedSteps) await this.store.upsertBuildStep({buildId:build.id,stepKey:step,phase:phaseMap[step]??result.phase,status:'completed'});
       let deploymentSource: ApplicationDeploymentSource | undefined;
@@ -116,13 +116,13 @@ export class ApplicationBuildWorker {
       const persistedResult = result.phase === 'completed' && result.blueprint ? { ...result, deploymentSource } : result;
       const current=await this.store.getBuild(build.id);
       if(current?.status==='cancelled') return;
-      await this.store.updateBuild(build.id,{status:result.phase==='completed'?'completed':result.phase==='cancelled'?'cancelled':'failed',phase:result.phase,result:persistedResult,repairAttempts:result.repairAttempts,errorCode:result.errorCode});
+      await this.store.updateBuild(build.id,{status:result.phase==='completed'?'completed':result.phase==='cancelled'?'cancelled':'failed',phase:result.phase,result:persistedResult,repairAttempts:result.repairAttempts,errorCode:result.errorCode,workerId:this.workerId});
     }catch(error){
       const message=error instanceof Error?error.message:'APPLICATION_BUILD_FAILED';
       const current=await this.store.getBuild(build.id);
       if(current?.status==='cancelled') return;
       await this.store.addBuildEvent({buildId:build.id,eventType:controller.signal.aborted?'build.cancelled':'build.failed',phase:controller.signal.aborted?'cancelled':'failed',payload:{errorCode:message}});
-      await this.store.updateBuild(build.id,{status:controller.signal.aborted?'cancelled':'failed',phase:controller.signal.aborted?'cancelled':'failed',errorCode:message});
+      await this.store.updateBuild(build.id,{status:controller.signal.aborted?'cancelled':'failed',phase:controller.signal.aborted?'cancelled':'failed',errorCode:message,workerId:this.workerId});
     }finally{clearInterval(heartbeat);clearTimeout(timeout);this.controllers.delete(build.id);}
   }
 }
