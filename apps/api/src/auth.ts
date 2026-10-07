@@ -25,7 +25,7 @@ async function verifyNeonJwt(h: string, p: string, s: string, header: Record<str
   const jwk = (await loadJwks(url)).find(key => key.kid === kid);
   if (!jwk || jwk.kty !== 'RSA') throw new Error('AUTH_SIGNING_KEY_NOT_FOUND');
   let publicKey;
-  try { publicKey = createPublicKey({ key: jwk as JsonWebKey, format: 'jwk' }); } catch { throw new Error('AUTH_SIGNING_KEY_INVALID'); }
+  try { publicKey = createPublicKey({ key: jwk as unknown as import('node:crypto').JsonWebKey, format: 'jwk' }); } catch { throw new Error('AUTH_SIGNING_KEY_INVALID'); }
   const signature = Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4), 'base64');
   if (!verifySignature('RSA-SHA256', Buffer.from(`${h}.${p}`), publicKey, signature)) throw new Error('INVALID_AUTH_TOKEN');
   try { return JSON.parse(base64urlDecode(p)) as JwtPayload; } catch { throw new Error('INVALID_AUTH_TOKEN'); }
