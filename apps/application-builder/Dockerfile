@@ -15,12 +15,14 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
 COPY apps/application-builder/package.json apps/application-builder/package.json
 COPY packages/ai-core/package.json packages/ai-core/package.json
 COPY packages/db/package.json packages/db/package.json
+COPY packages/shared/package.json packages/shared/package.json
 
 RUN pnpm install --frozen-lockfile
 
 COPY apps/application-builder apps/application-builder
 COPY packages/ai-core packages/ai-core
 COPY packages/db packages/db
+COPY packages/shared packages/shared
 COPY tsconfig.json tsconfig.json
 
 RUN pnpm --filter @nexaforge/application-builder build
