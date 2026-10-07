@@ -76,7 +76,7 @@ const authorizationErrors = new Set([
   'PERSISTENT_ACTION_SECURITY_REPOSITORY_REQUIRED'
 ]);
 
-function executionErrorStatus(code: string): number {
+export function executionErrorStatus(code: string): number {
   if (authorizationErrors.has(code) || code.startsWith('AGENT_CAPABILITY_NOT_GRANTED:')) return 403;
   if (code === 'MODEL_PROVIDER_NOT_CONFIGURED' || code === 'SECURITY_REPOSITORY_NOT_CONFIGURED') return 503;
   if (code === 'ACTION_TIMEOUT') return 504;
