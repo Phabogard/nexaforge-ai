@@ -107,6 +107,7 @@ export interface TaskRepository {
   listEvents(taskId: string): Promise<TaskEventRecord[]>;
   createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
   createAuthenticatedWorkspace(input: { authSubject: string; email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
+  createAuthenticatedWorkspace(input: { authSubject: string; email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
   workspaceExists(id: string): Promise<boolean>;
   getWorkspace(id: string): Promise<WorkspaceRecord | null>;
   getOrCreateDefaultWorkspace(): Promise<WorkspaceRecord>;
@@ -148,6 +149,27 @@ class PostgresTaskRepository implements TaskRepository {
     if (bySubject.length) {
       userId = String((bySubject[0] as Record<string, unknown>).id);
     } else {
+      const byEmail = await this.sql`SELECT id, auth_subject FROM users WHERE email=${input.email} LIMIT 1`;
+      if (byEmail.length) {
+        const row = byEmail[0] as Record<string, unknown>;
+        if (row.auth_subject && String(row.auth_subject) !== input.authSubject) throw new Error('AUTH_EMAIL_ALREADY_BOUND');
+        const updated = await this.sql`UPDATE users SET auth_subject=${input.authSubject}, display_name=COALESCE(${input.displayName ?? null}, display_name) WHERE id=${String(row.id)}::uuid RETURNING id`;
+        userId = String((updated[0] as Record<string, unknown>).id);
+      } else {
+        const inserted = await this.sql`INSERT INTO users(email,display_name,auth_subject) VALUES(${input.email},${input.displayName ?? null},${input.authSubject}) RETURNING id`;
+        userId = String((inserted[0] as Record<string, unknown>).id);
+      }
+    }
+    const existing = await this.sql`SELECT id,name,owner_id,created_at FROM workspaces WHERE owner_id=${userId}::uuid ORDER BY created_at ASC LIMIT 1`;
+    if (existing.length) return toWorkspace(existing[0] as Record<string, unknown>);
+    const created = await this.sql`INSERT INTO workspaces(name,owner_id) VALUES(${input.workspaceName ?? 'NexaForge Workspace'},${userId}::uuid) RETURNING id,name,owner_id,created_at`;
+    return toWorkspace(created[0] as Record<string, unknown>);
+  }
+  async createAuthenticatedWorkspace(input: { authSubject: string; email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord> {
+    const bySubject = await this.sql`SELECT id FROM users WHERE auth_subject=${input.authSubject} LIMIT 1`;
+    let userId: string;
+    if (bySubject.length) userId = String((bySubject[0] as Record<string, unknown>).id);
+    else {
       const byEmail = await this.sql`SELECT id, auth_subject FROM users WHERE email=${input.email} LIMIT 1`;
       if (byEmail.length) {
         const row = byEmail[0] as Record<string, unknown>;
