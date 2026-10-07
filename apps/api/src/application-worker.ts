@@ -13,11 +13,35 @@ async function collectArtifacts(root:string):Promise<Array<{path:string,kind:str
   await walk(root); return out;
 }
 
+export type ApplicationWorkerEnvironment = {
+  nodeEnv?: string;
+  enabled?: string;
+  sandbox?: string;
+  isolated?: string;
+  imageBuild?: string;
+  imagePush?: string;
+};
+
+export function validateApplicationWorkerEnvironment(env: ApplicationWorkerEnvironment = process.env): string | null {
+  if (env.enabled !== 'true') return null;
+  const production = env.nodeEnv === 'production';
+  const containerSandbox = env.sandbox === 'container';
+  const isolatedWorker = env.isolated === 'true';
+  if (production && (!containerSandbox || !isolatedWorker)) return 'APPLICATION_WORKER_ISOLATION_REQUIRED';
+  if ((env.imageBuild === 'true' || env.imagePush === 'true') && !containerSandbox) return 'APPLICATION_SANDBOX_CONTAINER_REQUIRED';
+  return null;
+}
+
 export class ApplicationBuildWorker {
   private running=false; private timer?:NodeJS.Timeout; private readonly controllers=new Map<string,AbortController>(); private readonly workerId=`application-worker-${process.pid}-${randomUUID()}`; private readonly leaseSeconds=60; private readonly concurrency=Math.max(1,Number(process.env.NEXAFORGE_APPLICATION_WORKER_CONCURRENCY??'2')||2); private active=0;
   private readonly enabled = process.env.NEXAFORGE_APPLICATION_WORKER_ENABLED === 'true';
   constructor(private readonly store:ApplicationRepository,private readonly pollMs=1000,private readonly root=process.env.APPLICATION_WORKSPACE_ROOT??'/tmp/nexaforge-projects'){}
-  start(){if(!this.enabled){console.warn('[nexaforge-application-worker] disabled; set NEXAFORGE_APPLICATION_WORKER_ENABLED=true only in an isolated worker environment');return;}if(this.running)return;this.running=true;void this.loop();}
+  start(){
+    if(!this.enabled){console.warn('[nexaforge-application-worker] disabled; set NEXAFORGE_APPLICATION_WORKER_ENABLED=true only in an isolated worker environment');return;}
+    const isolationError = validateApplicationWorkerEnvironment();
+    if(isolationError){console.error(`[nexaforge-application-worker] refusing to start: ${isolationError}`);return;}
+    if(this.running)return;this.running=true;void this.loop();
+  }
   stop(){this.running=false;if(this.timer)clearTimeout(this.timer);for(const c of this.controllers.values())c.abort();this.controllers.clear();}
   cancel(id:string){this.controllers.get(id)?.abort();}
   private async loop(){while(this.running){let claimed=false;while(this.running&&this.active<this.concurrency){try{const build=await this.store.claimNextBuild(this.workerId,this.leaseSeconds);if(!build)break;claimed=true;this.active++;void this.process(build).finally(()=>{this.active--;});}catch(error){console.error('[nexaforge-application-worker]',error);break;}}if(this.running&&this.active===0&&!claimed)await new Promise<void>(r=>{this.timer=setTimeout(r,this.pollMs);});else if(this.running&&this.active>=this.concurrency)await new Promise<void>(r=>{this.timer=setTimeout(r,25);});}}
