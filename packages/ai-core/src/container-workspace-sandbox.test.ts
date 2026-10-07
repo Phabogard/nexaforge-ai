@@ -57,4 +57,15 @@ describe("container workspace sandbox - network isolation", () => {
     expect(() => sandbox.validateCommand({ command: "sh; rm -rf /", args: [], cwd: ".", timeoutMs: 1000 })).toThrow("WORKSPACE_COMMAND_NOT_ALLOWED");
     expect(() => sandbox.validateCommand({ command: "node", args: ["arg;bad"], cwd: ".", timeoutMs: 1000 })).toThrow("WORKSPACE_COMMAND_ARGUMENT_BLOCKED");
   });
+
+
+  it("publishes only the requested runtime port on loopback", () => {
+    const opts = { root: "/tmp/workspace" };
+    const cmd = { command: "pnpm", args: ["start"], cwd: ".", timeoutMs: 10000, env: { PORT: "3000" } };
+    const runtimeCmd = dockerCommand(opts, cmd, "runtime");
+    const publishIndex = runtimeCmd.args.indexOf("--publish");
+    expect(publishIndex).toBeGreaterThan(-1);
+    expect(runtimeCmd.args[publishIndex + 1]).toBe("127.0.0.1:3000:3000");
+    expect(runtimeCmd.args).toContain("--network=none");
+  });
 });
