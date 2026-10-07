@@ -81,7 +81,10 @@ app.post('/api/v1/agent-sessions', async (request, reply) => {
   const parsed = agentSessionSchema.safeParse(request.body); if (!parsed.success) return reply.code(400).send({ error:'INVALID_REQUEST', details:parsed.error.flatten() });
   const workspaceId = parsed.data.workspaceId ?? identity.workspaceId;
   if (identity.workspaceId && workspaceId && identity.workspaceId !== workspaceId) return reply.code(403).send({ error:'WORKSPACE_SCOPE_MISMATCH' });
-  if (workspaceId && !(await repository.workspaceExists(workspaceId))) return reply.code(404).send({ error:'WORKSPACE_NOT_FOUND' });
+  if (!workspaceId) return reply.code(400).send({ error:'WORKSPACE_REQUIRED' });
+  const workspace = await repository.getWorkspace(workspaceId);
+  if (!workspace) return reply.code(404).send({ error:'WORKSPACE_NOT_FOUND' });
+  if (workspace.ownerId !== identity.userId) return reply.code(403).send({ error:'WORKSPACE_ACCESS_DENIED' });
   try {
     const { AgentSessionManager, PermissionEngine } = await import('@nexaforge/ai-core');
     if (!securityRepository) return reply.code(503).send({ error:'SECURITY_REPOSITORY_NOT_CONFIGURED' });
