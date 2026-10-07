@@ -106,6 +106,7 @@ export interface TaskRepository {
   addEvent(taskId: string, type: string, payload: unknown): Promise<TaskEventRecord>;
   listEvents(taskId: string): Promise<TaskEventRecord[]>;
   createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
+  createAuthenticatedWorkspace(input: { authSubject: string; email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord>;
   workspaceExists(id: string): Promise<boolean>;
   getWorkspace(id: string): Promise<WorkspaceRecord | null>;
   getOrCreateDefaultWorkspace(): Promise<WorkspaceRecord>;
@@ -141,6 +142,28 @@ class PostgresTaskRepository implements TaskRepository {
   async addEvent(taskId: string, type: string, payload: unknown): Promise<TaskEventRecord> { const rows = await this.sql`INSERT INTO task_events (task_id, event_type, payload) VALUES (${taskId}::uuid, ${type}, ${JSON.stringify(payload)}::jsonb) RETURNING id, task_id, event_type, payload, created_at`; return toEvent(rows[0] as Record<string, unknown>); }
   async listEvents(taskId: string): Promise<TaskEventRecord[]> { const rows = await this.sql`SELECT id, task_id, event_type, payload, created_at FROM task_events WHERE task_id = ${taskId}::uuid ORDER BY created_at ASC`; return rows.map(row => toEvent(row as Record<string, unknown>)); }
   async createWorkspace(input: { email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord> { const rows = await this.sql`WITH new_user AS (INSERT INTO users (email, display_name) VALUES (${input.email}, ${input.displayName ?? null}) ON CONFLICT (email) DO UPDATE SET display_name = COALESCE(EXCLUDED.display_name, users.display_name) RETURNING id) INSERT INTO workspaces (name, owner_id) SELECT ${input.workspaceName ?? 'NexaForge Workspace'}, id FROM new_user RETURNING id, name, owner_id, created_at`; return toWorkspace(rows[0] as Record<string, unknown>); }
+  async createAuthenticatedWorkspace(input: { authSubject: string; email: string; displayName?: string; workspaceName?: string }): Promise<WorkspaceRecord> {
+    const bySubject = await this.sql`SELECT id FROM users WHERE auth_subject=${input.authSubject} LIMIT 1`;
+    let userId: string;
+    if (bySubject.length) {
+      userId = String((bySubject[0] as Record<string, unknown>).id);
+    } else {
+      const byEmail = await this.sql`SELECT id, auth_subject FROM users WHERE email=${input.email} LIMIT 1`;
+      if (byEmail.length) {
+        const row = byEmail[0] as Record<string, unknown>;
+        if (row.auth_subject && String(row.auth_subject) !== input.authSubject) throw new Error('AUTH_EMAIL_ALREADY_BOUND');
+        const updated = await this.sql`UPDATE users SET auth_subject=${input.authSubject}, display_name=COALESCE(${input.displayName ?? null}, display_name) WHERE id=${String(row.id)}::uuid RETURNING id`;
+        userId = String((updated[0] as Record<string, unknown>).id);
+      } else {
+        const inserted = await this.sql`INSERT INTO users(email,display_name,auth_subject) VALUES(${input.email},${input.displayName ?? null},${input.authSubject}) RETURNING id`;
+        userId = String((inserted[0] as Record<string, unknown>).id);
+      }
+    }
+    const existing = await this.sql`SELECT id,name,owner_id,created_at FROM workspaces WHERE owner_id=${userId}::uuid ORDER BY created_at ASC LIMIT 1`;
+    if (existing.length) return toWorkspace(existing[0] as Record<string, unknown>);
+    const created = await this.sql`INSERT INTO workspaces(name,owner_id) VALUES(${input.workspaceName ?? 'NexaForge Workspace'},${userId}::uuid) RETURNING id,name,owner_id,created_at`;
+    return toWorkspace(created[0] as Record<string, unknown>);
+  }
   async workspaceExists(id: string): Promise<boolean> { const rows = await this.sql`SELECT 1 FROM workspaces WHERE id = ${id}::uuid LIMIT 1`; return rows.length > 0; }
   async getWorkspace(id: string): Promise<WorkspaceRecord | null> { const rows = await this.sql`SELECT id, name, owner_id, created_at FROM workspaces WHERE id = ${id}::uuid LIMIT 1`; return rows.length ? toWorkspace(rows[0] as Record<string, unknown>) : null; }
   async getOrCreateDefaultWorkspace(): Promise<WorkspaceRecord> { const existing = await this.sql`SELECT id, name, owner_id, created_at FROM workspaces ORDER BY created_at ASC LIMIT 1`; if (existing.length > 0) return toWorkspace(existing[0] as Record<string, unknown>); return this.createWorkspace({ email:'default@nexaforge.ai', displayName:'Default User', workspaceName:'Default Workspace' }); }
