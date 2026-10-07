@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import { createApplicationRepository } from '@nexaforge/db';
 import { ApplicationBuildWorker } from './application-worker.js';
-import { assertApplicationWorkerIsolation } from './application-worker-guard.js';
+import { assertApplicationWorkerIsolation, assertDockerDaemonAvailable } from './application-worker-guard.js';
 
 const app = Fastify({ logger: true });
 const repository = createApplicationRepository();
@@ -23,7 +23,10 @@ const port = Number(process.env.PORT ?? '10000');
 const host = process.env.HOST ?? '0.0.0.0';
 
 async function start() {
-  if (buildEnabled) assertApplicationWorkerIsolation();
+  if (buildEnabled) {
+    assertApplicationWorkerIsolation();
+    await assertDockerDaemonAvailable();
+  }
   buildWorker?.start();
   await app.listen({ port, host });
 }
