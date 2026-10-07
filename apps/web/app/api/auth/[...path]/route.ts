@@ -11,6 +11,9 @@ async function proxy(request:NextRequest,path:string[]){
     redirect:'manual'
   });
   const headers=new Headers(response.headers);
+  const cookies=response.headers.getSetCookie?.()??[];
+  headers.delete('set-cookie');
+  for(const cookie of cookies) headers.append('set-cookie',cookie);
   return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
 export async function GET(request:NextRequest,context:{params:Promise<{path:string[]}>}){return proxy(request,(await context.params).path);}
