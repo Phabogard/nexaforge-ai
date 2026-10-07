@@ -83,8 +83,8 @@ export function executionErrorStatus(code: string): number {
   return 500;
 }
 
-function requireIdentity(request: any, reply: any) {
-  try { return verifyBearerToken(request.headers.authorization); }
+async function requireIdentity(request: any, reply: any) {
+  try { return await verifyBearerToken(request.headers.authorization); }
   catch (error) { const code = error instanceof Error ? error.message : 'AUTHENTICATION_FAILED'; reply.code(code === 'AUTHENTICATION_NOT_CONFIGURED' ? 503 : 401).send({ error: code }); return null; }
 }
 
@@ -96,8 +96,21 @@ const agentSessionSchema = z.object({
   expiresAt: z.string().datetime().optional()
 });
 
+app.post('/api/v1/workspaces', async (request, reply) => {
+  const identity = await requireIdentity(request, reply); if (!identity) return;
+  if (!repository) return reply.code(503).send({ error:'DATABASE_NOT_CONFIGURED' });
+  if (!identity.email) return reply.code(400).send({ error:'AUTH_EMAIL_REQUIRED' });
+  try {
+    const workspace = await repository.createAuthenticatedWorkspace({ authSubject:identity.userId, email:identity.email, workspaceName:'NexaForge Workspace' });
+    if (!securityRepository) return reply.code(503).send({ error:'SECURITY_REPOSITORY_NOT_CONFIGURED' });
+    const existing = await securityRepository.getPermission(identity.userId, 'ai.execute', workspace.id);
+    if (!existing) await securityRepository.grantPermission({ userId:identity.userId, workspaceId:workspace.id, capability:'ai.execute', grantedBy:'system' });
+    return reply.code(201).send({ workspace });
+  } catch (error) { request.log.error(error); return reply.code(500).send({ error:'AUTHENTICATED_WORKSPACE_CREATE_FAILED' }); }
+});
+
 app.post('/api/v1/agent-sessions', async (request, reply) => {
-  const identity = requireIdentity(request, reply); if (!identity) return;
+  const identity = await requireIdentity(request, reply); if (!identity) return;
   if (!repository) return reply.code(503).send({ error:'DATABASE_NOT_CONFIGURED' });
   const parsed = agentSessionSchema.safeParse(request.body); if (!parsed.success) return reply.code(400).send({ error:'INVALID_REQUEST', details:parsed.error.flatten() });
   const workspaceId = parsed.data.workspaceId ?? identity.workspaceId;
@@ -116,7 +129,7 @@ app.post('/api/v1/agent-sessions', async (request, reply) => {
 });
 
 app.post('/api/v1/agent-sessions/:sessionId/execute', async (request, reply) => {
-  const identity = requireIdentity(request, reply); if (!identity) return;
+  const identity = await requireIdentity(request, reply); if (!identity) return;
   if (!repository) return reply.code(503).send({ error:'DATABASE_NOT_CONFIGURED' });
   const body = z.object({ prompt:z.string().min(1).max(20000), mode:z.string().default('auto'), requiredCapabilities:z.array(z.string().min(1)).max(32).default([]), maxIterations:z.number().int().min(1).max(12).default(12), budgetCents:z.number().int().min(0).optional() }).safeParse(request.body);
   if (!body.success) return reply.code(400).send({ error:'INVALID_REQUEST', details:body.error.flatten() });
