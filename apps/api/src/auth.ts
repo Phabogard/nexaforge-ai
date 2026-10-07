@@ -37,7 +37,7 @@ export async function verifyBearerToken(authorization: string | undefined): Prom
   const [h,p,s] = parts;
   let header: Record<string, unknown>, payload: JwtPayload;
   try { header = JSON.parse(base64urlDecode(h)); } catch { throw new Error('INVALID_AUTH_TOKEN'); }
-  if (header.typ !== 'JWT') throw new Error('UNSUPPORTED_AUTH_TOKEN');
+  if (header.typ !== undefined && header.typ !== 'JWT') throw new Error('UNSUPPORTED_AUTH_TOKEN');
   if (header.alg === 'HS256') {
     const secret = process.env.NEXAFORGE_AUTH_JWT_SECRET;
     if (!secret) throw new Error('AUTHENTICATION_NOT_CONFIGURED');
