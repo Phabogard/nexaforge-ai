@@ -175,7 +175,7 @@ app.get('/health', async (request, reply) => {
   let dbOk = false;
   if (repository) dbOk = await repository.ping();
   if (isProduction && (!repository || !dbOk)) return reply.code(503).send({ ok:false, service:'nexaforge-api', persistence:repository?'postgres_unhealthy':'missing', worker:worker?'running':'disabled', applicationWorker:'external' });
-  return { ok:dbOk || (!repository && !isProduction), service:'nexaforge-api', persistence:repository?(dbOk?'postgres':'postgres_unhealthy'):'memory', worker:worker?'running':'disabled', applicationWorker:applicationWorker?'running':'disabled' };
+  return { ok:dbOk || (!repository && !isProduction), service:'nexaforge-api', persistence:repository?(dbOk?'postgres':'postgres_unhealthy'):'memory', worker:worker?'running':'disabled', applicationWorker:'external' };
 });
 
 const handleDefaultWorkspace = async (request: any, reply: any) => {
