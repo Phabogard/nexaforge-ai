@@ -62,6 +62,27 @@ const applicationDeploymentSchema = z.object({
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled']);
 const securityRepository = createPermissionRepository();
+const authorizationErrors = new Set([
+  'AGENT_SESSION_INVALID_OR_REVOKED',
+  'AGENT_SESSION_SCOPE_MISMATCH',
+  'AGENT_SESSION_SCOPE_MISSING',
+  'WORKSPACE_SCOPE_MISMATCH',
+  'AGENT_CAPABILITY_NOT_GRANTED',
+  'PERMISSION_DENIED',
+  'POLICY_DENIED',
+  'ACTION_REPLAY_REJECTED',
+  'EXPLICIT_APPROVAL_REQUIRED',
+  'APPROVAL_ALREADY_CONSUMED',
+  'PERSISTENT_ACTION_SECURITY_REPOSITORY_REQUIRED'
+]);
+
+function executionErrorStatus(code: string): number {
+  if (authorizationErrors.has(code) || code.startsWith('AGENT_CAPABILITY_NOT_GRANTED:')) return 403;
+  if (code === 'MODEL_PROVIDER_NOT_CONFIGURED' || code === 'SECURITY_REPOSITORY_NOT_CONFIGURED') return 503;
+  if (code === 'ACTION_TIMEOUT') return 504;
+  return 500;
+}
+
 function requireIdentity(request: any, reply: any) {
   try { return verifyBearerToken(request.headers.authorization); }
   catch (error) { const code = error instanceof Error ? error.message : 'AUTHENTICATION_FAILED'; reply.code(code === 'AUTHENTICATION_NOT_CONFIGURED' ? 503 : 401).send({ error: code }); return null; }
@@ -115,7 +136,11 @@ app.post('/api/v1/agent-sessions/:sessionId/execute', async (request, reply) => 
     const task:any = { id:randomUUID(), workspaceId:record.workspaceId ?? undefined, prompt:body.data.prompt, mode:body.data.mode as AgentMode, status:'running', maxIterations:body.data.maxIterations, budgetCents:body.data.budgetCents };
     const result = await secure.run({ task, userId:identity.userId, workspaceId:record.workspaceId ?? undefined, agentId, agentType:record.agentType as any, sessionId, requiredCapabilities:body.data.requiredCapabilities as any });
     return { task, result };
-  } catch (error) { request.log.error(error); return reply.code(403).send({ error:error instanceof Error ? error.message : 'AGENT_EXECUTION_DENIED' }); }
+  } catch (error) {
+    request.log.error(error);
+    const code = error instanceof Error ? error.message : 'AGENT_EXECUTION_FAILED';
+    return reply.code(executionErrorStatus(code)).send({ error: code });
+  }
 });
 
 const DEFAULT_DEV_WORKSPACE_ID = '00000000-0000-4000-8000-000000000001';
