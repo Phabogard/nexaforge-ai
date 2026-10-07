@@ -48,6 +48,7 @@ export interface PermissionRepository {
   listAuditLogs(filter: { userId?: string; workspaceId?: string; limit?: number }): Promise<AuditLogRecord[]>;
   createAgentSession(input: { userId: string; workspaceId?: string; agentType: string; grantedCapabilities?: string[]; metadata?: unknown; expiresAt?: string }): Promise<AgentSessionRecord>;
   getAgentSession(id: string): Promise<AgentSessionRecord | null>;
+  revokeAgentSession(id: string): Promise<boolean>;
   consumeApproval(input: { approvalId: string; actionId: string; userId: string; workspaceId?: string; agentId?: string }): Promise<boolean>;
   reserveAction(input: { actionId: string; userId: string; workspaceId?: string; agentId?: string }): Promise<{ reserved: boolean; existingStatus?: string }>;
   updateActionStatus(input: { actionId: string; userId: string; workspaceId?: string; agentId?: string; status: 'executed' | 'failed' | 'cancelled' }): Promise<boolean>;
@@ -258,6 +259,10 @@ export function createPermissionRepository(databaseUrl = process.env.DATABASE_UR
     async getAgentSession(id) {
       const r = await sql`SELECT * FROM agent_sessions WHERE id=${id}::uuid AND status='active' AND (expires_at IS NULL OR expires_at > now())`;
       return r.length ? toAgentSession(r[0] as Record<string, unknown>) : null;
+    },
+    async revokeAgentSession(id) {
+      const r = await sql`UPDATE agent_sessions SET status='revoked' WHERE id=${id}::uuid AND status='active' RETURNING id`;
+      return r.length > 0;
     },
     async consumeApproval(i) {
       const r = await sql`INSERT INTO consumed_approvals(approval_id, action_id, user_id, workspace_id, agent_id) VALUES(${i.approvalId}, ${i.actionId}, ${i.userId}, ${i.workspaceId ? i.workspaceId : null}::uuid, ${i.agentId ?? null}) ON CONFLICT(approval_id) DO NOTHING RETURNING id`;

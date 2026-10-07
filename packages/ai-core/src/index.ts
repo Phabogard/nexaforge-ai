@@ -150,3 +150,5 @@ export * from "./screen-contracts.js";
 export * from "./device-contracts.js";
 export * from "./tool-definition.js";
 export * from "./audit-payload-sanitizer.js";
+
+export * from './agent-session.js';
