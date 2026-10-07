@@ -7,6 +7,7 @@ import type { AgentMode } from '@nexaforge/shared';
 import { configuredWorker, type TaskWorker } from './task-worker.js';
 import { ApplicationBuildWorker } from './application-worker.js';
 import { ApplicationDeploymentWorker } from './deployment-worker.js';
+import { createPermissionRepository } from '@nexaforge/db';
 import { verifyBearerToken } from './auth.js';
 
 export const app = Fastify({ logger: true });
@@ -60,6 +61,7 @@ const applicationDeploymentSchema = z.object({
 });
 
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled']);
+const securityRepository = createPermissionRepository();
 function requireIdentity(request: any, reply: any) {
   try { return verifyBearerToken(request.headers.authorization); }
   catch (error) { const code = error instanceof Error ? error.message : 'AUTHENTICATION_FAILED'; reply.code(code === 'AUTHENTICATION_NOT_CONFIGURED' ? 503 : 401).send({ error: code }); return null; }
@@ -82,7 +84,8 @@ app.post('/api/v1/agent-sessions', async (request, reply) => {
   if (workspaceId && !(await repository.workspaceExists(workspaceId))) return reply.code(404).send({ error:'WORKSPACE_NOT_FOUND' });
   try {
     const { AgentSessionManager, PermissionEngine } = await import('@nexaforge/ai-core');
-    const manager = new AgentSessionManager(repository, new PermissionEngine(repository));
+    if (!securityRepository) return reply.code(503).send({ error:'SECURITY_REPOSITORY_NOT_CONFIGURED' });
+    const manager = new AgentSessionManager(securityRepository, new PermissionEngine(securityRepository));
     const session = await manager.start({ userId:identity.userId, workspaceId, agentId:parsed.data.agentId, agentType:parsed.data.agentType, requiredCapabilities:parsed.data.requiredCapabilities as any, expiresAt:parsed.data.expiresAt });
     return reply.code(201).send({ session });
   } catch (error) { request.log.error(error); return reply.code(500).send({ error:'AGENT_SESSION_CREATE_FAILED' }); }
@@ -94,17 +97,18 @@ app.post('/api/v1/agent-sessions/:sessionId/execute', async (request, reply) => 
   const body = z.object({ prompt:z.string().min(1).max(20000), mode:z.string().default('auto'), requiredCapabilities:z.array(z.string().min(1)).max(32).default([]), maxIterations:z.number().int().min(1).max(12).default(12), budgetCents:z.number().int().min(0).optional() }).safeParse(request.body);
   if (!body.success) return reply.code(400).send({ error:'INVALID_REQUEST', details:body.error.flatten() });
   const sessionId = (request.params as {sessionId:string}).sessionId;
-  const record = await repository.getAgentSession(sessionId);
+  if (!securityRepository) return reply.code(503).send({ error:'SECURITY_REPOSITORY_NOT_CONFIGURED' });
+  const record = await securityRepository.getAgentSession(sessionId);
   if (!record || record.userId !== identity.userId) return reply.code(403).send({ error:'AGENT_SESSION_SCOPE_MISMATCH' });
   if (identity.workspaceId && record.workspaceId !== identity.workspaceId) return reply.code(403).send({ error:'WORKSPACE_SCOPE_MISMATCH' });
   const metadata = (record.metadata ?? {}) as Record<string,unknown>; const agentId = typeof metadata.agentId === 'string' ? metadata.agentId : '';
   if (!agentId) return reply.code(403).send({ error:'AGENT_SESSION_SCOPE_MISSING' });
   try {
     const core = await import('@nexaforge/ai-core');
-    const pe = new core.PermissionEngine(repository); const policy = new core.PolicyEngine(repository); const audit = new core.AuditLogger(repository);
-    const action = new core.ActionEngine(pe, policy, audit, repository); const registry = core.createToolRegistry([core.echoTool, core.timeTool, core.webSearchTool]);
+    const pe = new core.PermissionEngine(securityRepository); const policy = new core.PolicyEngine(securityRepository); const audit = new core.AuditLogger(securityRepository);
+    const action = new core.ActionEngine(pe, policy, audit, securityRepository); const registry = core.createToolRegistry([core.echoTool, core.timeTool, core.webSearchTool]);
     const runtime = core.createSupervisor(registry.list(), core.createConfiguredModelProvider(), action);
-    const secure = new core.SecureAgentExecutor(repository, new core.BoundedAgentExecutor(runtime, registry));
+    const secure = new core.SecureAgentExecutor(securityRepository, new core.BoundedAgentExecutor(runtime, registry));
     const task:any = { id:randomUUID(), workspaceId:record.workspaceId ?? undefined, prompt:body.data.prompt, mode:body.data.mode as AgentMode, status:'running', maxIterations:body.data.maxIterations, budgetCents:body.data.budgetCents };
     const result = await secure.run({ task, userId:identity.userId, workspaceId:record.workspaceId ?? undefined, agentId, agentType:record.agentType as any, sessionId, requiredCapabilities:body.data.requiredCapabilities as any });
     return { task, result };
