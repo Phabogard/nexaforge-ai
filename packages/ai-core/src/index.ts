@@ -1,14 +1,16 @@
-import type { AgentMode, AgentTask, ToolCall } from '@nexaforge/shared';
+import type { AgentMode, AgentTask, ToolCall, Capability } from '@nexaforge/shared';
+import type { ActionEngine } from './action-engine.js';
+import type { AgentExecutionContext } from './agent-runtime.js';
 import { DEFAULT_EXECUTION_LIMITS } from './agent-runtime.js';
 export interface ToolContext { task:AgentTask; signal?:AbortSignal; }
-export interface Tool<I=unknown,O=unknown>{name:string;description:string;risk:'low'|'medium'|'high';execute(input:I,context:ToolContext):Promise<O>;}
+export interface Tool<I=unknown,O=unknown>{name:string;description:string;risk:'low'|'medium'|'high';capability?:Capability;execute(input:I,context:ToolContext):Promise<O>;}
 export interface ModelProvider{generate(input:{system:string;messages:Array<{role:string;content:string}>}):Promise<string>;}
 export interface PlanStep{id:string;objective:string;mode:AgentMode;tool?:string;input?:unknown;requiresApproval:boolean;}
-export interface AgentRuntime{plan(task:AgentTask):Promise<PlanStep[]>;execute(task:AgentTask,plan:PlanStep[],signal?:AbortSignal,context?:import('./agent-runtime.js').AgentExecutionContext):Promise<ToolCall[]>;synthesize(task:AgentTask,calls:ToolCall[]):Promise<string>;}
+export interface AgentRuntime{plan(task:AgentTask):Promise<PlanStep[]>;execute(task:AgentTask,plan:PlanStep[],signal?:AbortSignal,context?:AgentExecutionContext):Promise<ToolCall[]>;synthesize(task:AgentTask,calls:ToolCall[]):Promise<string>;}
 const APPROVAL_MODES=new Set<AgentMode>(['computer-use','browser']);const HIGH_RISK_TOOLS=new Set(['shell','filesystem-write','financial-action','account-action']);const VALID_MODES=new Set<AgentMode>(['auto','research','fact-check','deep-research','vision','browser','computer-use','trading','chart','probability','simulation','documents','code','news','monitoring','study','custom']);
 export function requiresApproval(mode:AgentMode,tool?:Tool):boolean{return APPROVAL_MODES.has(mode)||tool?.risk==='high'||!!tool&&HIGH_RISK_TOOLS.has(tool.name);}
 function parsePlan(raw:string,task:AgentTask,tools:Tool[]):PlanStep[]{let parsed:unknown;try{parsed=JSON.parse(raw);}catch{throw new Error('INVALID_PLAN_JSON');}if(!Array.isArray(parsed)||parsed.length===0||parsed.length>Math.min(task.maxIterations||DEFAULT_EXECUTION_LIMITS.maxIterations,DEFAULT_EXECUTION_LIMITS.maxIterations))throw new Error('INVALID_PLAN_SHAPE');const allowedTools=new Set(tools.map(tool=>tool.name));return parsed.map((item,index):PlanStep=>{if(!item||typeof item!=='object')throw new Error('INVALID_PLAN_STEP');const value=item as Record<string,unknown>;const objective=typeof value.objective==='string'?value.objective.trim():'';const tool=typeof value.tool==='string'?value.tool:undefined;const mode=typeof value.mode==='string'&&VALID_MODES.has(value.mode as AgentMode)?value.mode as AgentMode:task.mode;if(!objective)throw new Error('INVALID_PLAN_OBJECTIVE');if(tool&&!allowedTools.has(tool))throw new Error(`UNKNOWN_PLAN_TOOL:${tool}`);const candidate=tool?tools.find(entry=>entry.name===tool):undefined;return{id:typeof value.id==='string'&&value.id?value.id:`step-${index+1}`,objective,mode,tool,input:value.input,requiresApproval:value.requiresApproval===true||requiresApproval(mode,candidate)};});}
-export function createSupervisor(tools: Tool[], model: ModelProvider): AgentRuntime {
+export function createSupervisor(tools: Tool[], model: ModelProvider, actionEngine?: ActionEngine): AgentRuntime {
   return {
     async plan(task) {
       const toolList = tools
@@ -33,7 +35,7 @@ export function createSupervisor(tools: Tool[], model: ModelProvider): AgentRunt
       return parsePlan(raw, task, tools);
     },
 
-    async execute(task, plan, signal) {
+    async execute(task, plan, signal, context) {
       const calls: ToolCall[] = [];
       const maxIterations = Math.max(
         1,
@@ -74,17 +76,43 @@ export function createSupervisor(tools: Tool[], model: ModelProvider): AgentRunt
           input: step.input ?? {}
         };
 
-        if (step.requiresApproval || requiresApproval(task.mode, tool)) {
-          calls.push({ ...base, status: 'proposed', output: { approvalRequired: true } });
-          continue;
-        }
+        const legacyApprovalRequired = step.requiresApproval || requiresApproval(task.mode, tool);
 
         try {
-          calls.push({
-            ...base,
-            status: 'completed',
-            output: await tool.execute(step.input, { task, signal })
-          });
+          if (actionEngine && context) {
+            const capability = tool.capability ?? 'ai.execute';
+            const gated = await actionEngine.executeAction(
+              context,
+              {
+                actionId: base.id,
+                capability,
+                tool: tool.name,
+                actionName: `tool:${tool.name}`,
+                description: step.objective || tool.description,
+                params: (step.input ?? {}) as Record<string, unknown>,
+                timeoutMs: 30000
+              },
+              async (params, options) => tool.execute(params, { task, signal: options?.signal ?? signal })
+            );
+
+            if (gated.status === 'waiting_approval') {
+              calls.push({ ...base, status: 'proposed', output: gated.preview ?? { approvalRequired: true } });
+            } else if (gated.status === 'denied') {
+              calls.push({ ...base, status: 'blocked', output: { error: gated.error ?? 'ACTION_DENIED' } });
+            } else if (gated.status === 'failed') {
+              calls.push({ ...base, status: 'failed', output: { error: gated.error ?? 'ACTION_EXECUTION_FAILED' } });
+            } else {
+              calls.push({ ...base, status: 'completed', output: gated.result });
+            }
+          } else if (legacyApprovalRequired) {
+            calls.push({ ...base, status: 'proposed', output: { approvalRequired: true } });
+          } else {
+            calls.push({
+              ...base,
+              status: 'completed',
+              output: await tool.execute(step.input, { task, signal })
+            });
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : 'TOOL_EXECUTION_FAILED';
           if (signal?.aborted) throw new Error('TASK_CANCELLED');
@@ -152,3 +180,5 @@ export * from "./tool-definition.js";
 export * from "./audit-payload-sanitizer.js";
 
 export * from './agent-session.js';
+
+export * from './secure-agent-executor.js';
