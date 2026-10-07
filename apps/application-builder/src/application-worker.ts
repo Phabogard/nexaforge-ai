@@ -46,6 +46,11 @@ export class ApplicationBuildWorker {
   cancel(id:string){this.controllers.get(id)?.abort();}
   private async loop(){while(this.running){let claimed=false;while(this.running&&this.active<this.concurrency){try{const build=await this.store.claimNextBuild(this.workerId,this.leaseSeconds);if(!build)break;claimed=true;this.active++;void this.process(build).finally(()=>{this.active--;});}catch(error){console.error('[nexaforge-application-worker]',error);break;}}if(this.running&&this.active===0&&!claimed)await new Promise<void>(r=>{this.timer=setTimeout(r,this.pollMs);});else if(this.running&&this.active>=this.concurrency)await new Promise<void>(r=>{this.timer=setTimeout(r,25);});}}
   private async process(build:ApplicationBuildRecord){
+    if (await this.store.isBuildCancellationRequested(build.id)) {
+      await this.store.updateBuild(build.id,{status:'cancelled',phase:'cancelled',errorCode:'APPLICATION_BUILD_CANCELLED',workerId:this.workerId});
+      await this.store.addBuildEvent({buildId:build.id,eventType:'build.cancelled',phase:'cancelled',payload:{source:'durable_request'}});
+      return;
+    }
     const controller=new AbortController();this.controllers.set(build.id,controller);const buildTimeoutMs=Math.max(60000,Math.min(Number(process.env.NEXAFORGE_APPLICATION_BUILD_TIMEOUT_MS??'1800000')||1800000,7200000));const timeout=setTimeout(()=>controller.abort(),buildTimeoutMs);const heartbeat=setInterval(()=>{void this.store.renewBuildLease(build.id,this.workerId,this.leaseSeconds).catch(()=>{});},20000);
     const workspaceRoot=join(this.root,build.projectId);
     try{
@@ -67,16 +72,21 @@ export class ApplicationBuildWorker {
       const builder=createApplicationBuilder({model:createConfiguredModelProvider()});
       await this.store.upsertBuildStep({buildId:build.id,stepKey:'plan',phase:'planning',status:'running'});
       await this.store.addBuildEvent({buildId:build.id,eventType:'phase.started',phase:'planning'});
-      const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3,resumeFrom,checkpoint:async (checkpoint:any)=>{const previous=persistedSteps.find((step:any)=>step.stepKey===checkpoint.stepKey);const attempt=(previous?.attempt??0)+(checkpoint.status==='running'?1:0);await this.store.upsertBuildStep({buildId:build.id,stepKey:checkpoint.stepKey,phase:checkpoint.phase,status:checkpoint.status??'completed',attempt,output:checkpoint.output??{blueprint:checkpoint.blueprint,repairAttempts:checkpoint.repairAttempts},errorCode:checkpoint.errorCode});if(checkpoint.status!=='failed') await this.store.updateBuild(build.id,{status:'building',phase:checkpoint.phase,repairAttempts:checkpoint.repairAttempts,workerId:this.workerId});}},controller.signal);
+      const cancellationCheck=async()=>{if(await this.store.isBuildCancellationRequested(build.id)){controller.abort();throw new Error('APPLICATION_BUILD_CANCELLED');}};
+      await cancellationCheck();
+      const result=await builder.build({projectId:project.id,prompt:request.prompt,workspaceRoot,maxIterations:request.maxIterations??12,maxRepairAttempts:request.maxRepairAttempts??3,resumeFrom,checkpoint:async (checkpoint:any)=>{await cancellationCheck();const previous=persistedSteps.find((step:any)=>step.stepKey===checkpoint.stepKey);const attempt=(previous?.attempt??0)+(checkpoint.status==='running'?1:0);await this.store.upsertBuildStep({buildId:build.id,stepKey:checkpoint.stepKey,phase:checkpoint.phase,status:checkpoint.status??'completed',attempt,output:checkpoint.output??{blueprint:checkpoint.blueprint,repairAttempts:checkpoint.repairAttempts},errorCode:checkpoint.errorCode});if(checkpoint.status!=='failed') await this.store.updateBuild(build.id,{status:'building',phase:checkpoint.phase,repairAttempts:checkpoint.repairAttempts,workerId:this.workerId});}},controller.signal);
       const phaseMap:Record<string,string>={plan:'planning',scaffold:'scaffolding',code:'coding',install:'installing',test:'testing',repair:'repairing',validate:'validating'};
+      await cancellationCheck();
       for(const step of result.completedSteps) await this.store.upsertBuildStep({buildId:build.id,stepKey:step,phase:phaseMap[step]??result.phase,status:'completed'});
       let deploymentSource: ApplicationDeploymentSource | undefined;
+      await cancellationCheck();
       if(result.phase==='completed' && result.blueprint){
         const container = createContainerManifest(result.blueprint);
         const { writeFile } = await import('node:fs/promises');
         await writeFile(join(workspaceRoot, 'Dockerfile'), container.dockerfile, 'utf8');
         await this.store.addBuildEvent({buildId:build.id,eventType:'artifact.container_manifest',phase:'validating',payload:{port:container.port,healthcheck:container.healthcheck}});
         const version=await this.store.createProjectVersion({projectId:project.id,blueprint:result.blueprint});
+        await cancellationCheck();
         const artifacts=await collectArtifacts(workspaceRoot);
         for(const artifact of artifacts) await this.store.addArtifact({projectVersionId:version.id,path:artifact.path,kind:artifact.kind,contentHash:artifact.hash,sizeBytes:artifact.size});
 
