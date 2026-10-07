@@ -78,14 +78,14 @@ const authorizationErrors = new Set([
 
 export function executionErrorStatus(code: string): number {
   if (authorizationErrors.has(code) || code.startsWith('AGENT_CAPABILITY_NOT_GRANTED:')) return 403;
-  if (code === 'MODEL_PROVIDER_NOT_CONFIGURED' || code === 'SECURITY_REPOSITORY_NOT_CONFIGURED') return 503;
+  if (code === 'MODEL_PROVIDER_NOT_CONFIGURED' || code === 'SECURITY_REPOSITORY_NOT_CONFIGURED' || code === 'AUTHENTICATION_NOT_CONFIGURED' || code === 'AUTH_JWKS_NOT_CONFIGURED' || code === 'AUTH_JWKS_UNAVAILABLE' || code === 'AUTH_JWKS_INVALID') return 503;
   if (code === 'ACTION_TIMEOUT') return 504;
   return 500;
 }
 
 async function requireIdentity(request: any, reply: any) {
   try { return await verifyBearerToken(request.headers.authorization); }
-  catch (error) { const code = error instanceof Error ? error.message : 'AUTHENTICATION_FAILED'; reply.code(code === 'AUTHENTICATION_NOT_CONFIGURED' ? 503 : 401).send({ error: code }); return null; }
+  catch (error) { const code = error instanceof Error ? error.message : 'AUTHENTICATION_FAILED'; const status = ['AUTHENTICATION_NOT_CONFIGURED','AUTH_JWKS_NOT_CONFIGURED','AUTH_JWKS_UNAVAILABLE','AUTH_JWKS_INVALID'].includes(code) ? 503 : 401; reply.code(status).send({ error: code }); return null; }
 }
 
 const agentSessionSchema = z.object({
@@ -106,7 +106,7 @@ app.post('/api/v1/workspaces', async (request, reply) => {
     const existing = await securityRepository.getPermission(identity.userId, 'ai.execute', workspace.id);
     if (!existing) await securityRepository.grantPermission({ userId:identity.userId, workspaceId:workspace.id, capability:'ai.execute', grantedBy:'system' });
     return reply.code(201).send({ workspace });
-  } catch (error) { request.log.error(error); return reply.code(500).send({ error:'AUTHENTICATED_WORKSPACE_CREATE_FAILED' }); }
+  } catch (error) { request.log.error(error); const code = error instanceof Error ? error.message : 'AUTHENTICATED_WORKSPACE_CREATE_FAILED'; return reply.code(code === 'AUTH_EMAIL_ALREADY_BOUND' ? 409 : 500).send({ error: code }); }
 });
 
 app.post('/api/v1/agent-sessions', async (request, reply) => {
