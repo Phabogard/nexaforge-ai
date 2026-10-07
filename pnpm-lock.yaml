@@ -82,6 +82,9 @@ importers:
 
   packages/ai-core:
     dependencies:
+      '@nexaforge/db':
+        specifier: workspace:*
+        version: link:../db
       '@nexaforge/shared':
         specifier: workspace:*
         version: link:../shared

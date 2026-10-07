@@ -7,3 +7,12 @@ describe('packages/db createTaskRepository', () => {
     expect(repo).toBeNull();
   });
 });
+
+import { createPermissionRepository, createApplicationRepository } from './index.js';
+
+describe('packages/db repositories without database URL', () => {
+  it('returns null when database URL is missing', () => {
+    expect(createPermissionRepository('')).toBeNull();
+    expect(createApplicationRepository('')).toBeNull();
+  });
+});
